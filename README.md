@@ -21,13 +21,6 @@ spreadsheet, with customizable labels and receipt-level detail.
   storage.
 - **License:** MIT.
 
-## Docs
-
-- [docs/budget-app-logic-write-up.md](docs/budget-app-logic-write-up.md) —
-  the full specification of the spreadsheet logic this app preserves.
-- [docs/budget-app-vision-requirements.md](docs/budget-app-vision-requirements.md) —
-  vision, requirements, and open questions.
-
 ## Status
 
 Early stage. The spec docs are done; the app itself is not built yet.
