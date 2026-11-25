@@ -23,8 +23,10 @@ spreadsheet, with customizable labels and receipt-level detail.
 
 ## Status
 
-Early stage. The navigation shell, theme system, auth, and data layer are
-scaffolded; the screens are placeholders being filled in next.
+Early stage. All screens are implemented and wired to Supabase (schema v3);
+TypeScript is clean and the web build renders. Google sign-in needs the
+Google Cloud OAuth client and the Supabase Google provider configured
+before it works end to end. No native build yet.
 
 ## Development
 
