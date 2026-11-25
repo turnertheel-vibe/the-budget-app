@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#ECE7D8",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "icon": "./assets/icon.png",
+    "ios": {
+      "supportsTablet": true
+    },
+    "name": "The Budget App",
+    "orientation": "portrait",
+    "owner": "turnertheel-vibecode",
+    "plugins": [
+      "expo-web-browser"
+    ],
+    "scheme": "the-budget-app",
+    "slug": "the-budget-app",
+    "userInterfaceStyle": "automatic",
+    "version": "1.0.0",
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "65d4fd91-1517-4c5a-8d17-bf2ce59b32e7"
+      }
+    }
+  }
+}

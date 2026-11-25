@@ -23,4 +23,23 @@ spreadsheet, with customizable labels and receipt-level detail.
 
 ## Status
 
-Early stage. The spec docs are done; the app itself is not built yet.
+Early stage. The navigation shell, theme system, auth, and data layer are
+scaffolded; the screens are placeholders being filled in next.
+
+## Development
+
+```bash
+npm install
+npm run start   # or npm run web
+npx tsc --noEmit
+```
+
+Configuration lives in `.env` (copy `.env.example` to `.env`):
+
+- `EXPO_PUBLIC_SUPABASE_URL` — the Supabase project URL.
+- `EXPO_PUBLIC_SUPABASE_ANON_KEY` — the Supabase publishable (anon) key.
+
+Secrets live in `.env` locally and in EAS secrets for builds — never in the
+repo. Never put the Supabase service role key anywhere in this project.
+Google sign-in also needs the Google Cloud OAuth client and the Supabase
+Google provider configured before it works end to end.
