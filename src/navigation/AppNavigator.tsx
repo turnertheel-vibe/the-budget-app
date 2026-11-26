@@ -35,7 +35,14 @@ export type TabParamList = {
 
 export type RootStackParamList = {
   Main: undefined;
-  AddTransaction: undefined;
+  /**
+   * Opened from a parked (open) charge, the Add sheet is pre-filled from it
+   * and saving applies the row against the parked charge (see
+   * AddTransactionScreen). All fields optional; plain Add passes nothing.
+   */
+  AddTransaction:
+    | { openItemId?: string; openItemDescription?: string; openItemAmountCents?: number; openItemDate?: string }
+    | undefined;
   Labels: undefined;
   Accounts: undefined;
   ReimbursementLog: undefined;

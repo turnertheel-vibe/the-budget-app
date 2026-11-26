@@ -18,7 +18,9 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import type { RouteProp } from '@react-navigation/native';
+import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useTheme } from '../theme';
 import { formatDate, formatMoney, todayIso } from '../lib/money';
 import { supabase } from '../lib/supabase';
@@ -36,6 +38,12 @@ const NOVEMBER_2026 = '2026-11-01';
 export function AddTransactionScreen() {
   const { tokens } = useTheme();
   const navigation = useNavigation();
+  // Opened from a parked (open) charge, the sheet is pre-filled from it and
+  // saving applies the row against the charge (see save below). A parked
+  // charge only closes once its full amount has been split into labelled
+  // rows — "Receipt in" never resolves it by itself.
+  const route = useRoute<RouteProp<RootStackParamList, 'AddTransaction'>>();
+  const openItem = route.params;
   const { householdId, currency, dateFormat, prefs, loading: hhLoading, error: hhError } = useHousehold();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +54,9 @@ export function AddTransactionScreen() {
   const [fundBalances, setFundBalances] = useState<Map<string, number>>(new Map());
   const [recentLabelIds, setRecentLabelIds] = useState<string[]>([]);
 
-  const [digits, setDigits] = useState('');
+  const [digits, setDigits] = useState(() =>
+    openItem?.openItemAmountCents != null ? String(openItem.openItemAmountCents / 100) : '',
+  );
   const [negative, setNegative] = useState(false);
   const [section, setSection] = useState<LabelSection>('Expense');
   const [labelId, setLabelId] = useState('');
@@ -54,10 +64,11 @@ export function AddTransactionScreen() {
   const [accountId, setAccountId] = useState('');
   const [payFromSavings, setPayFromSavings] = useState(false);
   const [fundId, setFundId] = useState('');
-  const [merchant, setMerchant] = useState('');
+  const [merchant, setMerchant] = useState(openItem?.openItemDescription ?? '');
   const [note, setNote] = useState('');
   const [receipt, setReceipt] = useState('');
   const [day, setDay] = useState(() => {
+    if (openItem?.openItemDate?.startsWith('2026-11-')) return Number(openItem.openItemDate.slice(8, 10));
     const today = todayIso();
     return today.startsWith('2026-11-') ? Number(today.slice(8, 10)) : 24;
   });
@@ -215,6 +226,35 @@ export function AddTransactionScreen() {
       label: selectedLabel.label,
       from_bucket: payFromSavings ? selectedFund?.name ?? null : null,
     }).catch(() => undefined);
+    // Splitting a parked charge: apply this row against it. The charge stays
+    // open with the remainder until the full amount is split, then it closes.
+    // A negative row (reimbursement/refund/repayment) never counts against it.
+    if (openItem?.openItemId && signedCents > 0) {
+      const { data: item } = await supabase
+        .from('open_items')
+        .select('amount_cents')
+        .eq('id', openItem.openItemId)
+        .maybeSingle();
+      const remaining = (item?.amount_cents ?? signedCents) - signedCents;
+      if (remaining <= 0) {
+        await supabase
+          .from('open_items')
+          .update({ status: 'resolved', resolution_notes: 'Split into labelled rows from the Add sheet.' })
+          .eq('id', openItem.openItemId);
+        await logAudit('open_item.resolved', 'open_items', openItem.openItemId, {
+          description: openItem.openItemDescription ?? null,
+        }).catch(() => undefined);
+      } else {
+        await supabase
+          .from('open_items')
+          .update({ amount_cents: remaining })
+          .eq('id', openItem.openItemId);
+        await logAudit('open_item.split', 'open_items', openItem.openItemId, {
+          description: openItem.openItemDescription ?? null,
+          amount_cents: remaining,
+        }).catch(() => undefined);
+      }
+    }
     setBusy(false);
     navigation.goBack();
   };
@@ -248,6 +288,21 @@ export function AddTransactionScreen() {
           ? 'Negative entry — the app derives its kind from the label and note on save (REIMB → reimbursement, REFUND → refund, income → repayment).'
           : 'Enter the amount, pick a label, save.'}
       </Text>
+
+      {openItem?.openItemId ? (
+        <View style={{ backgroundColor: tokens.brandSoft, borderRadius: 10, marginTop: 12, padding: 12 }}>
+          <Text style={{ color: tokens.ink, fontSize: 13.5, fontWeight: '700' }}>
+            Splitting a parked charge — {openItem.openItemDescription ?? 'Parked charge'}
+          </Text>
+          <Text style={{ color: tokens.ink2, fontSize: 13, lineHeight: 18, marginTop: 4 }}>
+            {openItem.openItemAmountCents != null
+              ? `${formatMoney(openItem.openItemAmountCents, currency)} left to split. `
+              : ''}
+            Saving a labelled row counts it against the parked charge; when the full amount is split, the
+            charge closes. Save less than the full amount to keep splitting it later.
+          </Text>
+        </View>
+      ) : null}
 
       <View style={{ marginTop: 12 }}>
         <SegControl options={SECTIONS} value={section} onChange={chooseSection} />

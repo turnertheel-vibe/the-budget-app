@@ -49,6 +49,7 @@ export function ActivityScreen() {
   const [parkDesc, setParkDesc] = useState('');
   const [parkAmount, setParkAmount] = useState('');
   const [parkDate, setParkDate] = useState(todayIso());
+  const [parkBusy, setParkBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!householdId) return;
@@ -89,7 +90,8 @@ export function ActivityScreen() {
   );
 
   const parkItem = async () => {
-    if (!householdId || !parkDesc.trim()) return;
+    if (!householdId || !parkDesc.trim() || parkBusy) return;
+    setParkBusy(true);
     const cents = dollarsToCents(parkAmount);
     const { error: err } = await supabase.from('open_items').insert({
       household_id: householdId,
@@ -101,26 +103,29 @@ export function ActivityScreen() {
     });
     if (err) {
       setError(err.message);
+      setParkBusy(false);
       return;
     }
     await logAudit('open_item.parked', 'open_items', null, { description: parkDesc.trim(), amount_cents: cents }).catch(() => undefined);
     setParkDesc('');
     setParkAmount('');
     setParking(false);
+    setParkBusy(false);
     load();
   };
 
-  const resolveItem = async (item: OpenItem) => {
-    const { error: err } = await supabase
-      .from('open_items')
-      .update({ status: 'resolved', resolution_notes: 'Receipt arrived — split from the Add sheet.' })
-      .eq('id', item.id);
-    if (err) {
-      setError(err.message);
-      return;
-    }
-    await logAudit('open_item.resolved', 'open_items', item.id, { description: item.description }).catch(() => undefined);
-    load();
+  // "Receipt in" does NOT resolve the charge — it opens the Add sheet
+  // pre-filled from the parked charge so the receipt can be split into
+  // labelled rows. The charge only closes once its full amount is split
+  // (see AddTransactionScreen). Resolving here used to make the charge
+  // vanish with no labelled rows ever created.
+  const splitItem = (item: OpenItem) => {
+    navigation.navigate('AddTransaction', {
+      openItemId: item.id,
+      openItemDescription: item.description,
+      openItemAmountCents: item.amount_cents ?? undefined,
+      openItemDate: item.item_date ?? undefined,
+    });
   };
 
   if (hhLoading || loading) return <LoadingView />;
@@ -175,7 +180,7 @@ export function ActivityScreen() {
               <Text style={{ color: tokens.ink, fontSize: 14, fontWeight: '700' }}>
                 {item.amount_cents != null ? formatMoney(item.amount_cents, currency) : '—'}
               </Text>
-              <Pressable onPress={() => resolveItem(item)} style={[styles.smallBtn, { backgroundColor: tokens.brandSoft }]}>
+              <Pressable onPress={() => splitItem(item)} style={[styles.smallBtn, { backgroundColor: tokens.brandSoft }]}>
                 <Text style={{ color: tokens.brand, fontSize: 12.5, fontWeight: '700' }}>Receipt in</Text>
               </Pressable>
             </View>
@@ -209,7 +214,7 @@ export function ActivityScreen() {
               onChangeText={setParkDate}
               style={[styles.input, { color: tokens.ink, borderColor: tokens.line, backgroundColor: tokens.surface }]}
             />
-            <PrimaryButton label="Park it" disabled={!parkDesc.trim()} onPress={parkItem} />
+            <PrimaryButton label={parkBusy ? 'Parking…' : 'Park it'} disabled={!parkDesc.trim() || parkBusy} onPress={parkItem} />
             <Pressable onPress={() => setParking(false)} style={{ alignItems: 'center', paddingVertical: 8 }}>
               <Text style={{ color: tokens.ink2, fontWeight: '600' }}>Cancel</Text>
             </Pressable>
