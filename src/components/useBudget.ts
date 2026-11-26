@@ -44,27 +44,35 @@ export function useHousehold(): HouseholdContext {
   useEffect(() => {
     let mounted = true;
     (async () => {
-      setLoading(true);
-      setError(null);
-      const { data: members, error: membersError } = await listMyHouseholds();
-      if (!mounted) return;
-      if (membersError) {
-        setError(membersError);
+      try {
+        setLoading(true);
+        setError(null);
+        const { data: members, error: membersError } = await listMyHouseholds();
+        if (!mounted) return;
+        if (membersError) {
+          setError(membersError);
+          setLoading(false);
+          return;
+        }
+        const first = members && members.length > 0 ? members[0] : null;
+        if (!first) {
+          setError('No household found for this account yet.');
+          setLoading(false);
+          return;
+        }
+        setHouseholdId(first.household_id);
+        const { data: p, error: prefsError } = await getHouseholdPreferences(first.household_id);
+        if (!mounted) return;
+        if (prefsError) setError(prefsError);
+        else setPrefs(p);
         setLoading(false);
-        return;
-      }
-      const first = members && members.length > 0 ? members[0] : null;
-      if (!first) {
-        setError('No household found for this account yet.');
+      } catch (err) {
+        // A network-level failure throws instead of resolving with an
+        // error — without this the app would spin on Loading… forever.
+        if (!mounted) return;
+        setError(err instanceof Error ? err.message : 'Could not load your household.');
         setLoading(false);
-        return;
       }
-      setHouseholdId(first.household_id);
-      const { data: p, error: prefsError } = await getHouseholdPreferences(first.household_id);
-      if (!mounted) return;
-      if (prefsError) setError(prefsError);
-      else setPrefs(p);
-      setLoading(false);
     })();
     return () => {
       mounted = false;

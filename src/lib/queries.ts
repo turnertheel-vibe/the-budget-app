@@ -117,10 +117,14 @@ export async function listProjections(
   householdId: string,
   monthId: string,
 ): Promise<QueryResult<Projection[]>> {
+  // Projections has no household_id column — a projection belongs to a
+  // household through its month, and RLS enforces that. Filter by month
+  // only. (Filtering by household_id here fails with
+  // "column projections.household_id does not exist".)
+  void householdId;
   const { data, error } = await supabase
     .from('projections')
     .select('*')
-    .eq('household_id', householdId)
     .eq('month_id', monthId)
     .order('category', { ascending: true });
   return toResult((data ?? []) as Projection[], error);
