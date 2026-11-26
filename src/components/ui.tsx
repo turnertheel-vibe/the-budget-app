@@ -203,5 +203,5 @@ const styles = StyleSheet.create({
   rowTitle: { fontSize: 14.5, fontWeight: '600' },
   sectionTitle: { fontSize: 11, fontWeight: '800', letterSpacing: 0.6, marginTop: 20, textTransform: 'uppercase' },
   seg: { borderRadius: 10, flexDirection: 'row', padding: 3 },
-  segButton: { alignItems: 'center', borderRadius: 8, flex: 1, paddingVertical: 8 },
+  segButton: { alignItems: 'center', borderRadius: 8, flex: 1, paddingHorizontal: 14, paddingVertical: 8 },
 });

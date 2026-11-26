@@ -541,7 +541,12 @@ export function YearScreen() {
               anything worth a look. No asking needed.
             </Text>
           </View>
-          <SegControl options={['Off', 'On'] as const} value={briefingOn ? 'On' : 'Off'} onChange={(v) => toggleBriefing(v === 'On')} />
+          {/* Wrapped so the toggle keeps its natural height instead of
+              stretching to the full row height (the row's default
+              alignItems: 'stretch' made it a tall pill). */}
+          <View style={{ alignSelf: 'center' }}>
+            <SegControl options={['Off', 'On'] as const} value={briefingOn ? 'On' : 'Off'} onChange={(v) => toggleBriefing(v === 'On')} />
+          </View>
         </View>
       </Card>
       <View style={{ height: 24 }} />
