@@ -7,7 +7,7 @@
  * with no quoted reason — only pool↔bucket moves show the user-typed
  * reason in quotes.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../theme';
@@ -37,6 +37,9 @@ export function SavingsScreen() {
   const { tokens } = useTheme();
   const { householdId, currency, dateFormat, loading: hhLoading, error: hhError } = useHousehold();
   const [loading, setLoading] = useState(true);
+  // Only the first load shows the loading screen; later tab focuses refresh
+  // silently in the background so the tab stays where you left it.
+  const hasLoaded = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [poolCents, setPoolCents] = useState(0);
   const [funds, setFunds] = useState<SavingsFund[]>([]);
@@ -50,7 +53,7 @@ export function SavingsScreen() {
 
   const load = useCallback(async () => {
     if (!householdId) return;
-    setLoading(true);
+    if (!hasLoaded.current) setLoading(true);
     setError(null);
     const month = monthKey(new Date());
     const [poolRes, fundsRes, balRes, movRes, monthRes] = await Promise.all([
@@ -74,6 +77,7 @@ export function SavingsScreen() {
     } else {
       setPlannedSavings(0);
     }
+    hasLoaded.current = true;
     setLoading(false);
   }, [householdId]);
 

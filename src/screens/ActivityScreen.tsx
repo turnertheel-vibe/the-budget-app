@@ -4,7 +4,7 @@
  * description/date, or delete. Edits and deletes write audit entries.
  * Open Items sit at the top when any exist; the Reimbursement Log is linked.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -38,6 +38,11 @@ export function ActivityScreen() {
   const { householdId, currency, dateFormat, loading: hhLoading, error: hhError } = useHousehold();
   const [month, setMonth] = useState(() => monthKey(new Date()));
   const [loading, setLoading] = useState(true);
+  // Tabs stay mounted, but every focus re-ran load() with a full-screen
+  // LoadingView, which unmounted the list and reset the scroll to the top.
+  // Only the first load shows the loading screen; later focuses refresh
+  // silently in the background and the tab stays where you left it.
+  const hasLoaded = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
@@ -53,11 +58,12 @@ export function ActivityScreen() {
 
   const load = useCallback(async () => {
     if (!householdId) return;
-    setLoading(true);
+    if (!hasLoaded.current) setLoading(true);
     setError(null);
     const { data: m, error: mErr } = await getMonth(householdId, month);
     if (mErr) {
       setError(mErr);
+      hasLoaded.current = true;
       setLoading(false);
       return;
     }
@@ -73,6 +79,7 @@ export function ActivityScreen() {
     if (!m) {
       setNoMonth(true);
       setTransactions([]);
+      hasLoaded.current = true;
       setLoading(false);
       return;
     }
@@ -80,6 +87,7 @@ export function ActivityScreen() {
     const { data, error: txErr } = await listTransactions(householdId, m.id);
     if (txErr) setError(txErr);
     setTransactions(data ?? []);
+    hasLoaded.current = true;
     setLoading(false);
   }, [householdId, month]);
 

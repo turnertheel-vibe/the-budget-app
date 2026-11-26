@@ -4,7 +4,7 @@
  * amount per expense label. Savings labels are NOT budgeted here — they are
  * planned in the split and held in buckets on Savings.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../theme';
@@ -26,6 +26,10 @@ export function PlanScreen() {
   const { householdId, currency, loading: hhLoading, error: hhError } = useHousehold();
   const [month, setMonth] = useState(() => monthKey(new Date()));
   const [loading, setLoading] = useState(true);
+  // Only the first load shows the loading screen; later tab focuses refresh
+  // silently in the background so the tab stays where you left it (see
+  // ActivityScreen for why — the LoadingView swap reset the scroll).
+  const hasLoaded = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [monthRow, setMonthRow] = useState<Month | null>(null);
   const [projections, setProjections] = useState<Projection[]>([]);
@@ -51,11 +55,12 @@ export function PlanScreen() {
 
   const load = useCallback(async () => {
     if (!householdId) return;
-    setLoading(true);
+    if (!hasLoaded.current) setLoading(true);
     setError(null);
     const { data: m, error: mErr } = await getMonth(householdId, month);
     if (mErr) {
       setError(mErr);
+      hasLoaded.current = true;
       setLoading(false);
       return;
     }
@@ -83,6 +88,7 @@ export function PlanScreen() {
       setBudgets([]);
       setTransactions([]);
     }
+    hasLoaded.current = true;
     setLoading(false);
   }, [householdId, month]);
 

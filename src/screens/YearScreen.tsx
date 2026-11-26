@@ -6,7 +6,7 @@
  * The January reminder is derived, never stored: it clears the moment any
  * active goal exists for the target year.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -88,6 +88,9 @@ export function YearScreen() {
   const { householdId, currency, loading: hhLoading, error: hhError, prefs } = useHousehold();
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [loading, setLoading] = useState(true);
+  // Only the first load shows the loading screen; later tab focuses refresh
+  // silently in the background so the tab stays where you left it.
+  const hasLoaded = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [goals, setGoals] = useState<YearlyGoal[]>([]);
   const [funds, setFunds] = useState<SavingsFund[]>([]);
@@ -110,7 +113,7 @@ export function YearScreen() {
 
   const load = useCallback(async () => {
     if (!householdId) return;
-    setLoading(true);
+    if (!hasLoaded.current) setLoading(true);
     setError(null);
     const [goalsRes, fundsRes, balRes, poolRes, prefsRes] = await Promise.all([
       listYearlyGoals(householdId, year),
@@ -200,6 +203,7 @@ export function YearScreen() {
     }
     const stored = await AsyncStorage.getItem(BRIEFING_KEY);
     setBriefingOn(stored === 'on');
+    hasLoaded.current = true;
     setLoading(false);
   }, [householdId, year, currency]);
 

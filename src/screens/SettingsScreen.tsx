@@ -5,7 +5,7 @@
  * Defaults, notification timing, and household data live in Supabase.
  * Month-start day is NOT here — deferred by Turner.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -55,6 +55,9 @@ export function SettingsScreen() {
   const session = useSession();
   const { householdId, prefs, currency, dateFormat, loading: hhLoading, error: hhError, refresh } = useHousehold();
   const [loading, setLoading] = useState(true);
+  // Only the first load shows the loading screen; later tab focuses refresh
+  // silently in the background so the tab stays where you left it.
+  const hasLoaded = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [members, setMembers] = useState<HouseholdMember[]>([]);
@@ -83,7 +86,7 @@ export function SettingsScreen() {
 
   const load = useCallback(async () => {
     if (!householdId) return;
-    setLoading(true);
+    if (!hasLoaded.current) setLoading(true);
     setError(null);
     const [membersRes, auditRes, accountsRes] = await Promise.all([
       listHouseholdMembers(householdId),
@@ -105,6 +108,7 @@ export function SettingsScreen() {
     setReceiptsLocation(receipts ?? '');
     setOverspend(over !== 'off');
     setDefaultAccountId(prefs?.default_account_id ?? '');
+    hasLoaded.current = true;
     setLoading(false);
   }, [householdId, prefs?.default_account_id]);
 
