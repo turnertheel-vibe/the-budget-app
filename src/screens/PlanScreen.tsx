@@ -100,6 +100,9 @@ export function PlanScreen() {
   const splitTotal = needsNum + wantsNum + savingsNum;
   const splitOver = splitTotal > 100;
   const unallocated = Math.max(0, 100 - splitTotal);
+  // Derived percentages are floating-point sums (100 - 77.4 - 8.1 - 5.6 =
+  // 8.900000000000006), so round them to 1 decimal for display.
+  const pct1 = (n: number) => parseFloat(n.toFixed(1));
 
   const saveSplit = async () => {
     if (!householdId || !monthRow || splitOver) return;
@@ -317,7 +320,7 @@ export function PlanScreen() {
 
       {monthRow ? (
         <Card>
-          <CardTitle title="How it splits" right={`${splitTotal}%`} />
+          <CardTitle title="How it splits" right={`${pct1(splitTotal)}%`} />
           <SplitBar
             segments={[
               { value: needsNum, color: tokens.needs },
@@ -329,7 +332,7 @@ export function PlanScreen() {
             <Text style={{ color: tokens.ink2, fontSize: 12.5 }}>Needs {needsNum}%</Text>
             <Text style={{ color: tokens.ink2, fontSize: 12.5 }}>Wants {wantsNum}%</Text>
             <Text style={{ color: tokens.ink2, fontSize: 12.5 }}>Savings {savingsNum}%</Text>
-            {unallocated > 0 ? <Text style={{ color: tokens.ink2, fontSize: 12.5 }}>Unallocated {unallocated}%</Text> : null}
+            {unallocated > 0 ? <Text style={{ color: tokens.ink2, fontSize: 12.5 }}>Unallocated {pct1(unallocated)}%</Text> : null}
           </View>
           {splitOver ? (
             <Text style={{ color: tokens.danger, fontSize: 13, fontWeight: '700', marginTop: 8 }}>
