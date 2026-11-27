@@ -6,6 +6,8 @@
  * The Spending card is a compact Needs/Wants/Savings summary. The Breakdown
  * card shows earning, spending and saving per category, like the spreadsheet
  * Dashboard: Income by source, Expenses by label category, Savings by fund.
+ * Rows with a plan show a progress bar (actual inside, planned to its right);
+ * rows without one show just the amount.
  */
 import { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -109,11 +111,11 @@ export function HomeScreen() {
 
   // Breakdown card: earning, spending and saving per category, like the
   // spreadsheet Dashboard. Income by source, Expenses by label category,
-  // Savings by fund (label). A row shows "actual of planned" only when a
-  // plan exists for it (projection, or a label budget in that category);
-  // otherwise it shows just the actual. Income rows also pick up any income
-  // label with actuals but no projected source, so the rows reconcile with
-  // the Income header total.
+  // Savings by fund (label). A row carries its plan (projection, or a label
+  // budget in that category) so it can render a progress bar; a row with no
+  // plan shows just the actual. Income rows also pick up any income label
+  // with actuals but no projected source, so the rows reconcile with the
+  // Income header total.
   // NOTE: this useMemo must stay above the early returns below. A hook after
   // a conditional return changes the hook count between renders, which
   // crashes the whole app to a blank page once loading finishes.
@@ -280,6 +282,7 @@ export function HomeScreen() {
                 planned={projected}
                 rows={breakdown.incomeRows}
                 currency={currency}
+                color={tokens.brand}
               />
               <BreakdownGroup
                 title="Expenses"
@@ -287,6 +290,7 @@ export function HomeScreen() {
                 planned={plannedNeeds + plannedWants}
                 rows={breakdown.expenseRows}
                 currency={currency}
+                color={tokens.needs}
               />
               <BreakdownGroup
                 title="Savings"
@@ -294,6 +298,7 @@ export function HomeScreen() {
                 planned={plannedSavings}
                 rows={breakdown.savingsRows}
                 currency={currency}
+                color={tokens.savings}
               />
             </Card>
           ) : null}
@@ -352,38 +357,90 @@ function SplitStat({
   );
 }
 
+function ProgressBar({
+  actual,
+  planned,
+  color,
+  currency,
+}: {
+  actual: number;
+  planned: number;
+  color: string;
+  currency: Currency;
+}) {
+  // Actual inside the bar, planned to its right — no "of" phrasing.
+  // The amount's colour flips with the fill: dark on the bare track, white
+  // once the fill covers most of the text.
+  const { tokens } = useTheme();
+  const ratio = planned > 0 ? Math.min(Math.max(actual / planned, 0), 1) : 0;
+  const over = planned > 0 && actual > planned;
+  return (
+    <View style={{ alignItems: 'center', flex: 1.3, flexDirection: 'row', gap: 8 }}>
+      <View style={[styles.progressTrack, { backgroundColor: tokens.line }]}>
+        <View
+          style={{
+            width: `${ratio * 100}%`,
+            height: '100%',
+            backgroundColor: over ? tokens.danger : color,
+            borderRadius: 99,
+          }}
+        />
+        <Text
+          style={{
+            position: 'absolute',
+            left: 8,
+            lineHeight: 20,
+            color: ratio >= 0.45 ? '#FFFFFF' : tokens.ink,
+            fontSize: 12,
+            fontWeight: '700',
+          }}
+        >
+          {formatMoney(actual, currency)}
+        </Text>
+      </View>
+      <Text style={{ color: tokens.ink2, fontSize: 13, fontWeight: '600', width: 70, textAlign: 'right' }}>
+        {formatMoney(planned, currency)}
+      </Text>
+    </View>
+  );
+}
+
 function BreakdownGroup({
   title,
   actual,
   planned,
   rows,
   currency,
+  color,
 }: {
   title: string;
   actual: number;
   planned: number;
   rows: { name: string; actual: number; planned: number | null }[];
   currency: Currency;
+  color: string;
 }) {
   const { tokens } = useTheme();
   return (
     <View style={{ marginTop: 14 }}>
-      <View style={styles.srcRow}>
-        <Text style={{ color: tokens.ink, fontSize: 14.5, fontWeight: '800' }}>{title}</Text>
-        <Text style={{ color: tokens.ink2, fontSize: 13, fontWeight: '600' }}>
-          {formatMoney(actual, currency)} of {formatMoney(planned, currency)}
+      <View style={styles.breakRow}>
+        <Text style={{ color: tokens.ink, fontSize: 14.5, fontWeight: '800', flex: 1 }} numberOfLines={1}>
+          {title}
         </Text>
+        <ProgressBar actual={actual} planned={planned} color={color} currency={currency} />
       </View>
       {rows.map((r) => (
         <View key={r.name} style={styles.breakRow}>
           <Text style={{ color: tokens.ink, fontSize: 13.5, flex: 1 }} numberOfLines={1}>
             {r.name}
           </Text>
-          <Text style={{ color: tokens.ink2, fontSize: 13, fontWeight: '600' }}>
-            {r.planned != null && r.planned > 0
-              ? `${formatMoney(r.actual, currency)} of ${formatMoney(r.planned, currency)}`
-              : formatMoney(r.actual, currency)}
-          </Text>
+          {r.planned != null && r.planned > 0 ? (
+            <ProgressBar actual={r.actual} planned={r.planned} color={color} currency={currency} />
+          ) : (
+            <Text style={{ color: tokens.ink2, fontSize: 13, fontWeight: '600', textAlign: 'right' }}>
+              {formatMoney(r.actual, currency)}
+            </Text>
+          )}
         </View>
       ))}
     </View>
@@ -391,7 +448,7 @@ function BreakdownGroup({
 }
 
 const styles = StyleSheet.create({
-  breakRow: { flexDirection: 'row', gap: 10, justifyContent: 'space-between', paddingVertical: 5 },
+  breakRow: { alignItems: 'center', flexDirection: 'row', gap: 10, justifyContent: 'space-between', paddingVertical: 5 },
   container: { padding: 16 },
   dot: { borderRadius: 5, height: 10, width: 10 },
   header: { alignItems: 'flex-start', flexDirection: 'row', justifyContent: 'space-between' },
@@ -406,6 +463,7 @@ const styles = StyleSheet.create({
   monthTitle: { fontSize: 24, fontWeight: '800', letterSpacing: -0.4 },
   navBtn: { alignItems: 'center', borderRadius: 10, borderWidth: 1, height: 36, justifyContent: 'center', width: 36 },
   navRow: { flexDirection: 'row', gap: 6 },
+  progressTrack: { borderRadius: 99, flex: 1, height: 20, justifyContent: 'center', overflow: 'hidden' },
   splitBar: { borderRadius: 99, flexDirection: 'row', height: 8, marginTop: 12, overflow: 'hidden' },
   splitStats: { flexDirection: 'row', gap: 10, marginTop: 12 },
   srcRow: { alignItems: 'baseline', flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
