@@ -20,7 +20,12 @@
  * builder — add one labelled amount at a time, see what is categorised and
  * what is left, then save all rows at once. The charge closes only when the
  * rows cover its full amount. No +/− toggle in split mode: rows are positive
- * allocations of the charge, and a row can never exceed what is left.
+ * allocations of the charge, and a row can never exceed what is left. Keep
+ * the split sheet's words to a minimum: the banner carries just the title,
+ * the uncategorised remainder in large type, and the small "X of Y
+ * categorised" line — no how-to paragraph, no hint under the amount. After
+ * a row is added, the draft amount defaults to the new remainder, so the big
+ * number at the top always shows what is still left until the user types.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -237,7 +242,10 @@ export function AddTransactionScreen() {
         fundName: payFromSavings ? (selectedFund?.name ?? null) : null,
       },
     ]);
-    setDigits('');
+    // The next row defaults to whatever is left, so the big amount at the
+    // top always shows the uncategorised remainder until the user types.
+    const newLeft = splitLeft - cents;
+    setDigits(newLeft > 0 ? String(newLeft / 100) : '');
     setLabelId('');
     setLabelSearch('');
     setPayFromSavings(false);
@@ -414,26 +422,24 @@ export function AddTransactionScreen() {
           {formatMoney(signedCents, currency)}
         </Text>
       </View>
-      <Text style={[styles.hint, { color: tokens.ink2 }]}>
-        {isSplit
-          ? 'Add a labelled row for part of the charge, then the next — the sheet tracks what is left.'
-          : negative
+      {!isSplit ? (
+        <Text style={[styles.hint, { color: tokens.ink2 }]}>
+          {negative
             ? 'Negative entry — the app derives its kind from the label and note on save (REIMB → reimbursement, REFUND → refund, income → repayment).'
             : 'Enter the amount, pick a label, save.'}
-      </Text>
+        </Text>
+      ) : null}
 
       {openItem?.openItemId ? (
         <View style={{ backgroundColor: tokens.brandSoft, borderRadius: 10, marginTop: 12, padding: 12 }}>
           <Text style={{ color: tokens.ink, fontSize: 13.5, fontWeight: '700' }}>
             Splitting a parked charge — {openItem.openItemDescription ?? 'Parked charge'}
           </Text>
-          <Text style={{ color: tokens.ink2, fontSize: 13, lineHeight: 18, marginTop: 4 }}>
-            {formatMoney(splitTotal, currency)} categorised of {formatMoney(splitTarget, currency)} ·{' '}
-            {splitLeft > 0 ? `${formatMoney(splitLeft, currency)} left to split.` : 'Fully split — save to close the charge.'}
+          <Text style={{ color: tokens.ink, fontSize: 26, fontWeight: '800', marginTop: 6 }}>
+            {splitLeft > 0 ? `${formatMoney(splitLeft, currency)} left` : 'Fully split'}
           </Text>
-          <Text style={{ color: tokens.ink2, fontSize: 13, lineHeight: 18, marginTop: 4 }}>
-            Add rows below and save them all at once. Saving less than the full amount keeps the charge open
-            with the rest, so you can finish it later.
+          <Text style={{ color: tokens.ink2, fontSize: 13, marginTop: 2 }}>
+            {formatMoney(splitTotal, currency)} of {formatMoney(splitTarget, currency)} categorised
           </Text>
           {splitRows.length > 0 ? (
             <View style={{ marginTop: 8 }}>
