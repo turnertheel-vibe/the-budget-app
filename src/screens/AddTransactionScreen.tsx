@@ -15,6 +15,12 @@
  * the transaction_id and is removed if the transaction is deleted.
  *
  * Date is November 2026 only for now (the app's first month); the UI says so.
+ *
+ * Split mode (opened from a parked charge): the sheet becomes a split
+ * builder — add one labelled amount at a time, see what is categorised and
+ * what is left, then save all rows at once. The charge closes only when the
+ * rows cover its full amount. No +/− toggle in split mode: rows are positive
+ * allocations of the charge, and a row can never exceed what is left.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -74,6 +80,14 @@ export function AddTransactionScreen() {
   });
   const [busy, setBusy] = useState(false);
 
+  // Split builder (only when opened from a parked charge): the user adds one
+  // labelled amount at a time and saves them all in one sitting. splitRows
+  // holds the rows built so far; the draft (amount + label + bucket) is the
+  // same form as a normal transaction, reset after each row is added.
+  type SplitRow = { id: number; labelId: string; label: string; cents: number; fundId: string | null; fundName: string | null };
+  const [splitRows, setSplitRows] = useState<SplitRow[]>([]);
+  const [splitSeq, setSplitSeq] = useState(0);
+
   const load = useCallback(async () => {
     if (!householdId) return;
     setLoading(true);
@@ -120,9 +134,23 @@ export function AddTransactionScreen() {
   const cents = Math.round((Number.parseFloat(digits || '0') || 0) * 100);
   const signedCents = negative ? -cents : cents;
   const dateIso = `2026-11-${String(day).padStart(2, '0')}`;
+
+  // Split-mode derived values. splitTarget is the parked charge's amount as
+  // opened (the sheet's pre-fill); splitLeft is what is still uncategorised.
+  const isSplit = !!openItem?.openItemId;
+  const splitTarget = openItem?.openItemAmountCents ?? 0;
+  const splitTotal = splitRows.reduce((sum, r) => sum + r.cents, 0);
+  const splitLeft = Math.max(0, splitTarget - splitTotal);
+  // Money already promised to a bucket by rows in this split, so the draft
+  // row's bucket check uses what the bucket still has free.
+  const fundCommitted = splitRows
+    .filter((r) => r.fundId && r.fundId === fundId)
+    .reduce((sum, r) => sum + r.cents, 0);
   const selectedLabel = labels.find((l) => l.id === labelId) ?? null;
   const selectedFund = funds.find((f) => f.id === fundId) ?? null;
-  const fundBalance = fundId ? (fundBalances.get(fundId) ?? 0) : 0;
+  // Free balance for the draft row: the bucket's balance less what this
+  // split's earlier rows already promised to it (0 outside split mode).
+  const fundBalance = fundId ? (fundBalances.get(fundId) ?? 0) - fundCommitted : 0;
 
   // Switching section, going negative, or answering No clears the bucket choice.
   const chooseSection = (s: LabelSection) => {
@@ -167,6 +195,10 @@ export function AddTransactionScreen() {
     !busy &&
     (!payFromSavings || !!fundId) &&
     !bucketShort;
+  // Split mode: the draft row must fit in what's left of the charge, and the
+  // split saves once at least one row is built.
+  const canAddRow = isSplit && canSave && cents <= splitLeft;
+  const canSaveSplit = isSplit && splitRows.length > 0 && !!monthId && !busy;
 
   const pressKey = (key: string) => {
     if (key === 'back') {
@@ -178,6 +210,101 @@ export function AddTransactionScreen() {
     const [, frac] = next.split('.');
     if (frac !== undefined && frac.length > 2) return;
     setDigits(next);
+  };
+
+  // Split builder actions. A row captures the draft's label, amount and
+  // bucket; adding it resets the draft (amount + label + bucket) so the next
+  // row starts clean, while merchant / date / account stay shared.
+  const addSplitRow = () => {
+    if (!canAddRow || !selectedLabel) return;
+    const id = splitSeq + 1;
+    setSplitSeq(id);
+    setSplitRows((rows) => [
+      ...rows,
+      {
+        id,
+        labelId: selectedLabel.id,
+        label: selectedLabel.label,
+        cents,
+        fundId: payFromSavings ? fundId : null,
+        fundName: payFromSavings ? (selectedFund?.name ?? null) : null,
+      },
+    ]);
+    setDigits('');
+    setLabelId('');
+    setLabelSearch('');
+    setPayFromSavings(false);
+    setFundId('');
+  };
+  const removeSplitRow = (id: number) => {
+    setSplitRows((rows) => rows.filter((r) => r.id !== id));
+  };
+
+  // Saves every built row as its own transaction, then applies the total
+  // against the parked charge once. The charge closes only when the rows
+  // cover its full amount; a partial split leaves it open with the rest.
+  const saveSplit = async () => {
+    if (!householdId || !monthId || !openItem?.openItemId || !canSaveSplit) return;
+    setBusy(true);
+    setError(null);
+    const description = note.trim() || merchant.trim();
+    let saved = 0;
+    for (const row of splitRows) {
+      const res = await insertTransaction({
+        householdId,
+        month: NOVEMBER_2026,
+        description: description || row.label,
+        merchant: merchant.trim() || null,
+        txnDate: dateIso,
+        amountCents: row.cents,
+        labelId: row.labelId,
+        accountId: accountId || null,
+        source: 'manual',
+        receiptRef: receipt.trim() || null,
+        fundId: row.fundId,
+      });
+      const err = resultError(res);
+      if (err) {
+        setError(saved === 0 ? err : `${saved} of ${splitRows.length} rows saved, then: ${err}`);
+        setBusy(false);
+        return;
+      }
+      const inserted = resultData<{ id?: string; description?: string; kind?: string }>(res);
+      await logAudit('transaction.created', 'transactions', inserted?.id ?? null, {
+        description: inserted?.description ?? row.label,
+        amount_cents: row.cents,
+        kind: inserted?.kind ?? null,
+        label: row.label,
+        from_bucket: row.fundName,
+      }).catch(() => undefined);
+      saved += 1;
+    }
+    const { data: item } = await supabase
+      .from('open_items')
+      .select('amount_cents')
+      .eq('id', openItem.openItemId)
+      .maybeSingle();
+    const remaining = (item?.amount_cents ?? splitTotal) - splitTotal;
+    if (remaining <= 0) {
+      await supabase
+        .from('open_items')
+        .update({ status: 'resolved', resolution_notes: 'Split into labelled rows from the Add sheet.' })
+        .eq('id', openItem.openItemId);
+      await logAudit('open_item.resolved', 'open_items', openItem.openItemId, {
+        description: openItem.openItemDescription ?? null,
+      }).catch(() => undefined);
+    } else {
+      await supabase
+        .from('open_items')
+        .update({ amount_cents: remaining })
+        .eq('id', openItem.openItemId);
+      await logAudit('open_item.split', 'open_items', openItem.openItemId, {
+        description: openItem.openItemDescription ?? null,
+        amount_cents: remaining,
+      }).catch(() => undefined);
+    }
+    setBusy(false);
+    navigation.goBack();
   };
 
   const save = async () => {
@@ -266,22 +393,26 @@ export function AddTransactionScreen() {
   return (
     <ScrollView style={{ backgroundColor: tokens.bg }} contentContainerStyle={styles.container}>
       <View style={styles.amountRow}>
-        <Pressable
-          accessibilityLabel="Make amount negative"
-          accessibilityState={{ selected: negative }}
-          onPress={toggleNegative}
-          style={[styles.signToggle, { borderColor: tokens.line, backgroundColor: negative ? tokens.dangerSoft : tokens.surface }]}
-        >
-          <Text style={{ color: negative ? tokens.danger : tokens.ink, fontSize: 18, fontWeight: '700' }}>+/−</Text>
-        </Pressable>
+        {!isSplit ? (
+          <Pressable
+            accessibilityLabel="Make amount negative"
+            accessibilityState={{ selected: negative }}
+            onPress={toggleNegative}
+            style={[styles.signToggle, { borderColor: tokens.line, backgroundColor: negative ? tokens.dangerSoft : tokens.surface }]}
+          >
+            <Text style={{ color: negative ? tokens.danger : tokens.ink, fontSize: 18, fontWeight: '700' }}>+/−</Text>
+          </Pressable>
+        ) : null}
         <Text style={[styles.amount, { color: negative ? tokens.danger : tokens.ink }]}>
           {formatMoney(signedCents, currency)}
         </Text>
       </View>
       <Text style={[styles.hint, { color: tokens.ink2 }]}>
-        {negative
-          ? 'Negative entry — the app derives its kind from the label and note on save (REIMB → reimbursement, REFUND → refund, income → repayment).'
-          : 'Enter the amount, pick a label, save.'}
+        {isSplit
+          ? 'Add a labelled row for part of the charge, then the next — the sheet tracks what is left.'
+          : negative
+            ? 'Negative entry — the app derives its kind from the label and note on save (REIMB → reimbursement, REFUND → refund, income → repayment).'
+            : 'Enter the amount, pick a label, save.'}
       </Text>
 
       {openItem?.openItemId ? (
@@ -290,12 +421,38 @@ export function AddTransactionScreen() {
             Splitting a parked charge — {openItem.openItemDescription ?? 'Parked charge'}
           </Text>
           <Text style={{ color: tokens.ink2, fontSize: 13, lineHeight: 18, marginTop: 4 }}>
-            {openItem.openItemAmountCents != null
-              ? `${formatMoney(openItem.openItemAmountCents, currency)} left to split. `
-              : ''}
-            Saving a labelled row counts it against the parked charge; when the full amount is split, the
-            charge closes. Save less than the full amount to keep splitting it later.
+            {formatMoney(splitTotal, currency)} categorised of {formatMoney(splitTarget, currency)} ·{' '}
+            {splitLeft > 0 ? `${formatMoney(splitLeft, currency)} left to split.` : 'Fully split — save to close the charge.'}
           </Text>
+          <Text style={{ color: tokens.ink2, fontSize: 13, lineHeight: 18, marginTop: 4 }}>
+            Add rows below and save them all at once. Saving less than the full amount keeps the charge open
+            with the rest, so you can finish it later.
+          </Text>
+          {splitRows.length > 0 ? (
+            <View style={{ marginTop: 8 }}>
+              {splitRows.map((row) => (
+                <View
+                  key={row.id}
+                  style={{ alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}
+                >
+                  <Text style={{ color: tokens.ink, fontSize: 14, fontWeight: '600', flex: 1 }}>
+                    {row.label}
+                    {row.fundName ? ` · from ${row.fundName}` : ''}
+                  </Text>
+                  <Text style={{ color: tokens.ink, fontSize: 14, fontWeight: '600', marginRight: 10 }}>
+                    {formatMoney(row.cents, currency)}
+                  </Text>
+                  <Pressable
+                    accessibilityLabel={`Remove ${row.label} row`}
+                    onPress={() => removeSplitRow(row.id)}
+                    style={{ borderColor: tokens.line, borderRadius: 8, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 2 }}
+                  >
+                    <Text style={{ color: tokens.ink2, fontSize: 14, fontWeight: '700' }}>×</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -337,6 +494,26 @@ export function AddTransactionScreen() {
         <EmptyState title="No labels yet" body="Add a label from the Chart of accounts first." />
       ) : recent.length === 0 && !selectedLabel ? (
         <Text style={{ color: tokens.ink3, fontSize: 13, marginTop: 8 }}>Type above to search all labels.</Text>
+      ) : null}
+      {isSplit ? (
+        <View>
+          <Pressable
+            disabled={!canAddRow}
+            onPress={addSplitRow}
+            style={[styles.saveButton, { backgroundColor: canAddRow ? tokens.brand : tokens.unallocated, marginTop: 12 }]}
+          >
+            <Text style={[styles.saveText, { color: tokens.brandInk }]}>
+              {selectedLabel && cents > 0
+                ? `Add ${formatMoney(cents, currency)} · ${selectedLabel.label}`
+                : 'Add this row to the split'}
+            </Text>
+          </Pressable>
+          {!!selectedLabel && cents > splitLeft ? (
+            <Text style={{ color: tokens.danger, fontSize: 13, marginTop: 8 }}>
+              That is more than the {formatMoney(splitLeft, currency)} left to split — lower the amount first.
+            </Text>
+          ) : null}
+        </View>
       ) : null}
 
       <Text style={[styles.fieldLabel, { color: tokens.ink2 }]}>Account</Text>
@@ -441,7 +618,7 @@ export function AddTransactionScreen() {
         style={[styles.input, { color: tokens.ink, borderColor: tokens.line, backgroundColor: tokens.surface }]}
       />
       <TextInput
-        placeholder="Note (optional) — start with REIMB or REFUND for a negative expense entry"
+        placeholder={isSplit ? 'Note (optional) — applies to every row in this split' : 'Note (optional) — start with REIMB or REFUND for a negative expense entry'}
         placeholderTextColor={tokens.ink3}
         value={note}
         onChangeText={setNote}
@@ -475,16 +652,29 @@ export function AddTransactionScreen() {
         </Text>
       ) : null}
       <Pressable
-        disabled={!canSave}
-        onPress={save}
-        style={[styles.saveButton, { backgroundColor: canSave ? tokens.brand : tokens.unallocated }]}
+        disabled={isSplit ? !canSaveSplit : !canSave}
+        onPress={isSplit ? saveSplit : save}
+        style={[
+          styles.saveButton,
+          { backgroundColor: (isSplit ? canSaveSplit : canSave) ? tokens.brand : tokens.unallocated },
+        ]}
       >
-        <Text style={[styles.saveText, { color: tokens.brandInk }]}>{busy ? 'Saving…' : 'Save transaction'}</Text>
+        <Text style={[styles.saveText, { color: tokens.brandInk }]}>
+          {busy
+            ? 'Saving…'
+            : isSplit
+              ? splitRows.length === 0
+                ? 'Save split'
+                : `Save split · ${splitRows.length} row${splitRows.length === 1 ? '' : 's'} · ${formatMoney(splitTotal, currency)}`
+              : 'Save transaction'}
+        </Text>
       </Pressable>
-      <Text style={{ color: tokens.ink3, fontSize: 12, lineHeight: 17, marginTop: 8, textAlign: 'center' }}>
-        Assumption to confirm with Turner: a negative expense entry with no REIMB/REFUND note is saved as a
-        reimbursement, with “REIMB ” added to its description.
-      </Text>
+      {!isSplit ? (
+        <Text style={{ color: tokens.ink3, fontSize: 12, lineHeight: 17, marginTop: 8, textAlign: 'center' }}>
+          Assumption to confirm with Turner: a negative expense entry with no REIMB/REFUND note is saved as a
+          reimbursement, with “REIMB ” added to its description.
+        </Text>
+      ) : null}
       <ErrorText message={error} />
       <View style={{ height: 24 }} />
     </ScrollView>
