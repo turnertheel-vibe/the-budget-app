@@ -3,6 +3,9 @@
  * Tap a row for the detail sheet: edit amount/label/account/merchant/
  * description/date, or delete. Edits and deletes write audit entries.
  * Open Items sit at the top when any exist; the Reimbursement Log is linked.
+ * A parked charge can be deleted from its row: × arms a two-tap confirm,
+ * "Delete?" removes it (audit-logged; it was never a transaction, so there
+ * is nothing else to keep).
  */
 import { useCallback, useRef, useState } from 'react';
 import {
@@ -55,11 +58,15 @@ export function ActivityScreen() {
   const [parkAmount, setParkAmount] = useState('');
   const [parkDate, setParkDate] = useState(todayIso());
   const [parkBusy, setParkBusy] = useState(false);
+  // Which parked charge is one tap into a two-tap delete (same idiom as the
+  // transaction detail sheet's confirm delete).
+  const [confirmDeleteItemId, setConfirmDeleteItemId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!householdId) return;
     if (!hasLoaded.current) setLoading(true);
     setError(null);
+    setConfirmDeleteItemId(null);
     const { data: m, error: mErr } = await getMonth(householdId, month);
     if (mErr) {
       setError(mErr);
@@ -136,6 +143,23 @@ export function ActivityScreen() {
     });
   };
 
+  // Delete a parked charge outright (it was never logged, so there is no
+  // transaction to keep). Two taps: × arms the confirm, "Delete?" does it.
+  // The audit log keeps the record, same as a deleted transaction.
+  const deleteItem = async (item: OpenItem) => {
+    const { error: err } = await supabase.from('open_items').delete().eq('id', item.id);
+    if (err) {
+      setError(err.message);
+      return;
+    }
+    await logAudit('open_item.deleted', 'open_items', item.id, {
+      description: item.description,
+      amount_cents: item.amount_cents,
+    }).catch(() => undefined);
+    setConfirmDeleteItemId(null);
+    load();
+  };
+
   if (hhLoading || loading) return <LoadingView />;
   if (hhError || !householdId) {
     return (
@@ -191,6 +215,19 @@ export function ActivityScreen() {
               <Pressable onPress={() => splitItem(item)} style={[styles.smallBtn, { backgroundColor: tokens.brandSoft }]}>
                 <Text style={{ color: tokens.brand, fontSize: 12.5, fontWeight: '700' }}>Receipt in</Text>
               </Pressable>
+              {confirmDeleteItemId === item.id ? (
+                <Pressable onPress={() => deleteItem(item)} style={[styles.smallBtn, { backgroundColor: tokens.dangerSoft }]}>
+                  <Text style={{ color: tokens.danger, fontSize: 12.5, fontWeight: '700' }}>Delete?</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  accessibilityLabel={`Delete ${item.description}`}
+                  onPress={() => setConfirmDeleteItemId(item.id)}
+                  style={{ borderColor: tokens.line, borderRadius: 8, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 2 }}
+                >
+                  <Text style={{ color: tokens.ink2, fontSize: 14, fontWeight: '700' }}>×</Text>
+                </Pressable>
+              )}
             </View>
           ))}
         </Card>
