@@ -159,6 +159,13 @@ export function AddTransactionScreen() {
     setPayFromSavings(false);
     setFundId('');
   };
+  // Picking a label clears the search box: the pick stays visible as the
+  // Selected row, and the list below stops claiming "No labels match" for a
+  // query whose only match is the label just picked.
+  const pickLabel = (id: string) => {
+    setLabelId(id);
+    setLabelSearch('');
+  };
   const toggleNegative = () => {
     setNegative((n) => !n);
     setPayFromSavings(false);
@@ -472,14 +479,14 @@ export function AddTransactionScreen() {
         <View>
           <Text style={[styles.groupLabel, { color: tokens.ink2 }]}>Most recent</Text>
           {recent.map((l) => (
-            <LabelRow key={l.id} label={l} selected={labelId === l.id} onPress={() => setLabelId(l.id)} />
+            <LabelRow key={l.id} label={l} selected={labelId === l.id} onPress={() => pickLabel(l.id)} />
           ))}
         </View>
       ) : null}
       {selectedLabel && !recentIds.has(selectedLabel.id) ? (
         <View>
           <Text style={[styles.groupLabel, { color: tokens.ink2 }]}>Selected</Text>
-          <LabelRow label={selectedLabel} selected onPress={() => setLabelId(selectedLabel.id)} />
+          <LabelRow label={selectedLabel} selected onPress={() => pickLabel(selectedLabel.id)} />
         </View>
       ) : null}
       {searching ? (
@@ -487,7 +494,7 @@ export function AddTransactionScreen() {
           <Text style={{ color: tokens.ink3, fontSize: 13, marginTop: 8 }}>No labels match that search.</Text>
         ) : (
           filtered.map((l) => (
-            <LabelRow key={l.id} label={l} selected={labelId === l.id} onPress={() => setLabelId(l.id)} />
+            <LabelRow key={l.id} label={l} selected={labelId === l.id} onPress={() => pickLabel(l.id)} />
           ))
         )
       ) : labels.length === 0 ? (
