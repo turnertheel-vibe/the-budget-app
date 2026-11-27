@@ -35,7 +35,7 @@ export interface Profile {
 }
 
 export interface HouseholdMember {
-  id: string;
+  // No `id` column: the table's key is household_id + user_id.
   household_id: string;
   user_id: string;
   role: HouseholdRole;

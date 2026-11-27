@@ -160,12 +160,17 @@ export function SettingsScreen() {
       setError('A household always keeps at least one owner.');
       return;
     }
-    const { error: err } = await supabase.from('household_members').update({ role }).eq('id', m.id);
+    // household_members has no `id` column — its key is household_id + user_id.
+    const { error: err } = await supabase
+      .from('household_members')
+      .update({ role })
+      .eq('household_id', m.household_id)
+      .eq('user_id', m.user_id);
     if (err) {
       setError(err.message);
       return;
     }
-    await logAudit('household.role_changed', 'household_members', m.id, { role }).catch(() => undefined);
+    await logAudit('household.role_changed', 'household_members', m.user_id, { role }).catch(() => undefined);
     load();
   };
 
@@ -174,12 +179,16 @@ export function SettingsScreen() {
       setError('A household always keeps at least one owner.');
       return;
     }
-    const { error: err } = await supabase.from('household_members').delete().eq('id', m.id);
+    const { error: err } = await supabase
+      .from('household_members')
+      .delete()
+      .eq('household_id', m.household_id)
+      .eq('user_id', m.user_id);
     if (err) {
       setError(err.message);
       return;
     }
-    await logAudit('household.member_removed', 'household_members', m.id, {}).catch(() => undefined);
+    await logAudit('household.member_removed', 'household_members', m.user_id, {}).catch(() => undefined);
     load();
   };
 
@@ -305,7 +314,7 @@ export function SettingsScreen() {
       <Card>
         <CardTitle title="Household" right={`${members.length} member${members.length === 1 ? '' : 's'}`} />
         {members.map((m) => (
-          <View key={m.id} style={[styles.memberRow, { borderTopColor: tokens.line }]}>
+          <View key={m.user_id} style={[styles.memberRow, { borderTopColor: tokens.line }]}>
             <View style={{ flex: 1 }}>
               <Text style={{ color: tokens.ink, fontSize: 14.5, fontWeight: '600' }}>
                 {m.profile?.display_name ?? m.user_id}
