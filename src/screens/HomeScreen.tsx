@@ -3,8 +3,11 @@
  * Reads from the Plan (projections + split + transactions); it never stores
  * its own numbers. Bucket-paid expenses count toward their label's
  * Needs/Wants category (see computeMonthSummary).
+ * The Spending card is a compact Needs/Wants/Savings summary. The Breakdown
+ * card shows earning, spending and saving per category, like the spreadsheet
+ * Dashboard: Income by source, Expenses by label category, Savings by fund.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { RootStackNavigation } from '../navigation/AppNavigator';
@@ -14,6 +17,7 @@ import {
   getMonth,
   listAccounts,
   listLabels,
+  listLabelBudgets,
   listOpenItems,
   listProjections,
   listSavingsMovements,
@@ -26,8 +30,8 @@ import {
   shiftMonth,
   useHousehold,
 } from '../components/useBudget';
-import { Bar, Card, CardTitle, EmptyState, ErrorText, LoadingView, RowButton } from '../components/ui';
-import type { Currency, Label, Projection, Transaction } from '../lib/types';
+import { Card, CardTitle, EmptyState, ErrorText, LoadingView, RowButton } from '../components/ui';
+import type { Currency, Label, LabelBudget, Projection, Transaction } from '../lib/types';
 
 export function HomeScreen() {
   const { tokens, appearance, setAppearance } = useTheme();
@@ -46,6 +50,8 @@ export function HomeScreen() {
   const [accountCount, setAccountCount] = useState(0);
   const [openItemCount, setOpenItemCount] = useState(0);
   const [reimbCount, setReimbCount] = useState(0);
+  const [labels, setLabels] = useState<Label[]>([]);
+  const [labelBudgets, setLabelBudgets] = useState<LabelBudget[]>([]);
 
   const load = useCallback(async () => {
     if (!householdId) return;
@@ -64,20 +70,23 @@ export function HomeScreen() {
       listOpenItems(householdId),
     ]);
     const labels: Label[] = labelsRes.data ?? [];
+    setLabels(labels);
     setLabelCount(labels.filter((l) => l.is_active).length);
     setAccountCount((accountsRes.data ?? []).filter((a) => a.is_active).length);
     setOpenItemCount((openRes.data ?? []).length);
 
     if (!m) {
       setSummary(null);
+      setLabelBudgets([]);
       setReimbCount(0);
       setLoading(false);
       return;
     }
-    const [txRes, projRes, movRes] = await Promise.all([
+    const [txRes, projRes, movRes, budRes] = await Promise.all([
       listTransactions(householdId, m.id),
       listProjections(householdId, m.id),
       listSavingsMovements(householdId),
+      listLabelBudgets(householdId, m.id),
     ]);
     if (txRes.error) setError(txRes.error);
     if (projRes.error) setError(projRes.error);
@@ -87,6 +96,7 @@ export function HomeScreen() {
       (movRes.data ?? []).filter(isSpendMovement).map((mv) => mv.transaction_id as string),
     );
     setSummary(computeMonthSummary(txs, labels, projs, bucketPaid));
+    setLabelBudgets(budRes.data ?? []);
     setReimbCount(txs.filter((t) => t.kind === 'reimbursement').length);
     setLoading(false);
   }, [householdId, month]);
@@ -125,6 +135,50 @@ export function HomeScreen() {
         : overPace
           ? 'Ahead of pace — spending is running ahead of the month'
           : 'On track — spending is inside the plan so far';
+
+  // Breakdown card: earning, spending and saving per category, like the
+  // spreadsheet Dashboard. Income by source, Expenses by label category,
+  // Savings by fund (label). A row shows "actual of planned" only when a
+  // plan exists for it (projection, or a label budget in that category);
+  // otherwise it shows just the actual. Income rows also pick up any income
+  // label with actuals but no projected source, so the rows reconcile with
+  // the Income header total.
+  const breakdown = useMemo(() => {
+    if (!summary) return null;
+    const perLabel = summary.perLabelSpent;
+    const budgetByLabel = new Map(labelBudgets.map((b) => [b.label_id, b.planned_cents]));
+    const incomeRows = (summary.perSource ?? []).map((s) => ({
+      name: s.name,
+      actual: s.actual,
+      planned: s.projected as number | null,
+    }));
+    const knownSources = new Set(incomeRows.map((r) => r.name));
+    for (const l of labels) {
+      if (l.section !== 'Income' || !l.is_active || knownSources.has(l.label)) continue;
+      const actual = perLabel.get(l.id) ?? 0;
+      if (actual !== 0) incomeRows.push({ name: l.label, actual, planned: null });
+    }
+    const expByCat = new Map<string, { actual: number; planned: number }>();
+    for (const l of labels) {
+      if (l.section !== 'Expense' || !l.is_active) continue;
+      const entry = expByCat.get(l.category) ?? { actual: 0, planned: 0 };
+      entry.actual += perLabel.get(l.id) ?? 0;
+      entry.planned += budgetByLabel.get(l.id) ?? 0;
+      expByCat.set(l.category, entry);
+    }
+    const expenseRows = [...expByCat.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([name, v]) => ({ name, actual: v.actual, planned: v.planned }));
+    const savingsRows = labels
+      .filter((l) => l.section === 'Savings' && l.is_active)
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .map((l) => ({ name: l.label, actual: perLabel.get(l.id) ?? 0, planned: null as number | null }));
+    return { incomeRows, expenseRows, savingsRows };
+  }, [summary, labels, labelBudgets]);
+  // Gross saved per fund this month (the Savings rows). The Spending card's
+  // Savings figure is the net one from the summary, which subtracts
+  // bucket-funded spending; both are $0 while no bucket has been spent from.
+  const savingsRowsTotal = breakdown?.savingsRows.reduce((s, r) => s + r.actual, 0) ?? 0;
 
   return (
     <ScrollView style={{ backgroundColor: tokens.bg }} contentContainerStyle={styles.container}>
@@ -201,41 +255,45 @@ export function HomeScreen() {
           </View>
 
           <Card>
-            <CardTitle
-              title="Income"
-              right={`${formatMoney(summary?.incomeActual ?? 0, currency)} of ${formatMoney(projected, currency)}`}
-            />
-            <Bar
-              fill={projected > 0 ? (summary?.incomeActual ?? 0) / projected : 0}
-              color={tokens.brand}
-              pace={pace}
-            />
-            {(summary?.perSource ?? []).map((s) => (
-              <View key={s.name} style={styles.srcRow}>
-                <Text style={{ color: tokens.ink, fontSize: 14, fontWeight: '600', flex: 1 }} numberOfLines={1}>
-                  {s.name}
-                </Text>
-                <Text style={{ color: tokens.ink2, fontSize: 13, fontWeight: '600' }}>
-                  {formatMoney(s.actual, currency)} / {formatMoney(s.projected, currency)}
-                </Text>
-              </View>
-            ))}
-            {(summary?.perSource ?? []).length === 0 ? (
-              <Text style={{ color: tokens.ink3, fontSize: 13, marginTop: 8 }}>
-                No income sources yet — add one on the Plan tab.
-              </Text>
-            ) : null}
+            <CardTitle title="Spending" right={`${formatMoney(out, currency)} out`} />
+            <View style={[styles.splitBar, { backgroundColor: tokens.line }]}>
+              <View style={{ flex: Math.max(summary?.needsActual ?? 0, 0), backgroundColor: tokens.needs }} />
+              <View style={{ flex: Math.max(summary?.wantsActual ?? 0, 0), backgroundColor: tokens.wants }} />
+              <View style={{ flex: Math.max(summary?.savingsActual ?? 0, 0), backgroundColor: tokens.savings }} />
+            </View>
+            <View style={styles.splitStats}>
+              <SplitStat label="Needs" actual={summary?.needsActual ?? 0} planned={plannedNeeds} color={tokens.needs} currency={currency} />
+              <SplitStat label="Wants" actual={summary?.wantsActual ?? 0} planned={plannedWants} color={tokens.wants} currency={currency} />
+              <SplitStat label="Savings" actual={summary?.savingsActual ?? 0} planned={plannedSavings} color={tokens.savings} currency={currency} />
+            </View>
           </Card>
 
-          <Card>
-            <CardTitle title="Spending" right={`${formatMoney(out, currency)} out`} />
-            <SpendingRow label="Needs" actual={summary?.needsActual ?? 0} planned={plannedNeeds} color={tokens.needs} currency={currency} pace={pace} />
-            <SpendingRow label="Wants" actual={summary?.wantsActual ?? 0} planned={plannedWants} color={tokens.wants} currency={currency} pace={pace} />
-            <SpendingRow label="Savings" actual={summary?.savingsActual ?? 0} planned={plannedSavings} color={tokens.savings} currency={currency} pace={pace} />
-            <Text style={{ color: tokens.ink3, fontSize: 12, marginTop: 8 }}>
-              Bucket-paid expenses count toward their label&apos;s Needs / Wants category.
-            </Text>
-          </Card>
+          {breakdown ? (
+            <Card>
+              <CardTitle title="Breakdown" />
+              <BreakdownGroup
+                title="Income"
+                actual={summary?.incomeActual ?? 0}
+                planned={projected}
+                rows={breakdown.incomeRows}
+                currency={currency}
+              />
+              <BreakdownGroup
+                title="Expenses"
+                actual={(summary?.needsActual ?? 0) + (summary?.wantsActual ?? 0)}
+                planned={plannedNeeds + plannedWants}
+                rows={breakdown.expenseRows}
+                currency={currency}
+              />
+              <BreakdownGroup
+                title="Savings"
+                actual={savingsRowsTotal}
+                planned={plannedSavings}
+                rows={breakdown.savingsRows}
+                currency={currency}
+              />
+            </Card>
+          ) : null}
         </>
       )}
 
@@ -264,38 +322,73 @@ export function HomeScreen() {
   );
 }
 
-function SpendingRow({
+function SplitStat({
   label,
   actual,
   planned,
   color,
   currency,
-  pace,
 }: {
   label: string;
   actual: number;
   planned: number;
   color: string;
   currency: Currency;
-  pace: number;
 }) {
   const { tokens } = useTheme();
-  const over = planned > 0 && actual > planned;
   return (
-    <View style={{ marginTop: 12 }}>
+    <View style={{ flex: 1 }}>
+      <Text style={{ color, fontSize: 11, fontWeight: '800', letterSpacing: 0.5, textTransform: 'uppercase' }}>
+        {label}
+      </Text>
+      <Text style={{ color: tokens.ink, fontSize: 14, fontWeight: '700', marginTop: 3 }}>
+        {formatMoney(actual, currency)}
+      </Text>
+      <Text style={{ color: tokens.ink3, fontSize: 11, marginTop: 1 }}>of {formatMoney(planned, currency)}</Text>
+    </View>
+  );
+}
+
+function BreakdownGroup({
+  title,
+  actual,
+  planned,
+  rows,
+  currency,
+}: {
+  title: string;
+  actual: number;
+  planned: number;
+  rows: { name: string; actual: number; planned: number | null }[];
+  currency: Currency;
+}) {
+  const { tokens } = useTheme();
+  return (
+    <View style={{ marginTop: 14 }}>
       <View style={styles.srcRow}>
-        <Text style={{ color: tokens.ink, fontSize: 14, fontWeight: '600' }}>{label}</Text>
-        <Text style={{ color: over ? tokens.danger : tokens.ink2, fontSize: 13, fontWeight: '600' }}>
+        <Text style={{ color: tokens.ink, fontSize: 14.5, fontWeight: '800' }}>{title}</Text>
+        <Text style={{ color: tokens.ink2, fontSize: 13, fontWeight: '600' }}>
           {formatMoney(actual, currency)} of {formatMoney(planned, currency)}
-          {over ? ' · over plan' : ''}
         </Text>
       </View>
-      <Bar fill={planned > 0 ? actual / planned : 0} color={over ? tokens.danger : color} pace={pace} />
+      {rows.map((r) => (
+        <View key={r.name} style={styles.breakRow}>
+          <Text style={{ color: tokens.ink, fontSize: 13.5, flex: 1 }} numberOfLines={1}>
+            {r.name}
+          </Text>
+          <Text style={{ color: tokens.ink2, fontSize: 13, fontWeight: '600' }}>
+            {r.planned != null && r.planned > 0
+              ? `${formatMoney(r.actual, currency)} of ${formatMoney(r.planned, currency)}`
+              : formatMoney(r.actual, currency)}
+          </Text>
+        </View>
+      ))}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  breakRow: { flexDirection: 'row', gap: 10, justifyContent: 'space-between', paddingVertical: 5 },
   container: { padding: 16 },
   dot: { borderRadius: 5, height: 10, width: 10 },
   header: { alignItems: 'flex-start', flexDirection: 'row', justifyContent: 'space-between' },
@@ -310,6 +403,8 @@ const styles = StyleSheet.create({
   monthTitle: { fontSize: 24, fontWeight: '800', letterSpacing: -0.4 },
   navBtn: { alignItems: 'center', borderRadius: 10, borderWidth: 1, height: 36, justifyContent: 'center', width: 36 },
   navRow: { flexDirection: 'row', gap: 6 },
+  splitBar: { borderRadius: 99, flexDirection: 'row', height: 8, marginTop: 12, overflow: 'hidden' },
+  splitStats: { flexDirection: 'row', gap: 10, marginTop: 12 },
   srcRow: { alignItems: 'baseline', flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
   statusRow: { alignItems: 'center', flexDirection: 'row', gap: 8, marginTop: 10 },
   statusText: { fontSize: 13.5, fontWeight: '600' },
