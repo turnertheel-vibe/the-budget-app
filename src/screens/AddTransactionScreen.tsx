@@ -150,19 +150,14 @@ export function AddTransactionScreen() {
       .slice(0, 5);
   }, [recentLabelIds, sectionLabels, searching]);
   const recentIds = new Set(recent.map((l) => l.id));
-  const grouped = useMemo(() => {
-    const list = sectionLabels.filter((l) => !recentIds.has(l.id));
-    const filtered = searching
-      ? list.filter((l) => l.label.toLowerCase().includes(labelSearch.trim().toLowerCase()))
-      : list;
-    const map = new Map<string, Label[]>();
-    for (const l of filtered) {
-      const arr = map.get(l.category) ?? [];
-      arr.push(l);
-      map.set(l.category, arr);
-    }
-    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [sectionLabels, recentIds, searching, labelSearch]);
+  // Type-to-filter: the full label list never renders. Typing filters to matching
+  // labels (flat list, no category groups); the selected label is excluded here
+  // because it is shown as the Selected row above.
+  const filtered = useMemo(() => {
+    if (!searching) return [];
+    const q = labelSearch.trim().toLowerCase();
+    return sectionLabels.filter((l) => l.id !== labelId && l.label.toLowerCase().includes(q));
+  }, [sectionLabels, searching, labelSearch, labelId]);
 
   const bucketShort = payFromSavings && cents > 0 && fundId && cents > fundBalance;
   const canSave =
@@ -324,20 +319,24 @@ export function AddTransactionScreen() {
           ))}
         </View>
       ) : null}
-      {grouped.length === 0 && recent.length === 0 ? (
+      {selectedLabel && !recentIds.has(selectedLabel.id) ? (
+        <View>
+          <Text style={[styles.groupLabel, { color: tokens.ink2 }]}>Selected</Text>
+          <LabelRow label={selectedLabel} selected onPress={() => setLabelId(selectedLabel.id)} />
+        </View>
+      ) : null}
+      {searching ? (
+        filtered.length === 0 ? (
+          <Text style={{ color: tokens.ink3, fontSize: 13, marginTop: 8 }}>No labels match that search.</Text>
+        ) : (
+          filtered.map((l) => (
+            <LabelRow key={l.id} label={l} selected={labelId === l.id} onPress={() => setLabelId(l.id)} />
+          ))
+        )
+      ) : labels.length === 0 ? (
         <EmptyState title="No labels yet" body="Add a label from the Chart of accounts first." />
-      ) : (
-        grouped.map(([category, rows]) => (
-          <View key={category}>
-            <Text style={[styles.groupLabel, { color: tokens.ink2 }]}>{category}</Text>
-            {rows.map((l) => (
-              <LabelRow key={l.id} label={l} selected={labelId === l.id} onPress={() => setLabelId(l.id)} />
-            ))}
-          </View>
-        ))
-      )}
-      {searching && grouped.length === 0 ? (
-        <Text style={{ color: tokens.ink3, fontSize: 13, marginTop: 8 }}>No labels match that search.</Text>
+      ) : recent.length === 0 && !selectedLabel ? (
+        <Text style={{ color: tokens.ink3, fontSize: 13, marginTop: 8 }}>Type above to search all labels.</Text>
       ) : null}
 
       <Text style={[styles.fieldLabel, { color: tokens.ink2 }]}>Account</Text>
@@ -503,9 +502,6 @@ function LabelRow({ label, selected, onPress }: { label: Label; selected: boolea
       ]}
     >
       <Text style={{ color: selected ? tokens.brand : tokens.ink, fontWeight: '600', flex: 1 }}>{label.label}</Text>
-      <Text style={{ color: tokens.ink3, fontSize: 12.5 }}>
-        {label.needs_wants ?? label.category}
-      </Text>
     </Pressable>
   );
 }
