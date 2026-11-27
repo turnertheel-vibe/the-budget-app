@@ -107,35 +107,6 @@ export function HomeScreen() {
     }, [load]),
   );
 
-  if (hhLoading || (loading && !summary && !monthRow)) return <LoadingView />;
-  if (hhError || !householdId) {
-    return (
-      <View style={[styles.container, { backgroundColor: tokens.bg }]}>
-        <ErrorText message={hhError ?? 'No household found.'} />
-      </View>
-    );
-  }
-
-  const pace = monthPace(month);
-  const needsPct = monthRow?.projected_needs_pct ?? 0;
-  const wantsPct = monthRow?.projected_wants_pct ?? 0;
-  const savingsPct = monthRow?.projected_savings_pct ?? 0;
-  const projected = summary?.projectedIncome ?? 0;
-  const plannedNeeds = Math.round((projected * needsPct) / 100);
-  const plannedWants = Math.round((projected * wantsPct) / 100);
-  const plannedSavings = Math.round((projected * savingsPct) / 100);
-  const out = summary?.out ?? 0;
-  const left = summary?.leftToSpend ?? projected;
-  const overPace = projected > 0 && out > projected * pace;
-  const status =
-    !summary || projected === 0
-      ? 'No plan for this month yet'
-      : left < 0
-        ? 'Over plan — spending is past projected income'
-        : overPace
-          ? 'Ahead of pace — spending is running ahead of the month'
-          : 'On track — spending is inside the plan so far';
-
   // Breakdown card: earning, spending and saving per category, like the
   // spreadsheet Dashboard. Income by source, Expenses by label category,
   // Savings by fund (label). A row shows "actual of planned" only when a
@@ -143,6 +114,9 @@ export function HomeScreen() {
   // otherwise it shows just the actual. Income rows also pick up any income
   // label with actuals but no projected source, so the rows reconcile with
   // the Income header total.
+  // NOTE: this useMemo must stay above the early returns below. A hook after
+  // a conditional return changes the hook count between renders, which
+  // crashes the whole app to a blank page once loading finishes.
   const breakdown = useMemo(() => {
     if (!summary) return null;
     const perLabel = summary.perLabelSpent;
@@ -179,6 +153,35 @@ export function HomeScreen() {
   // Savings figure is the net one from the summary, which subtracts
   // bucket-funded spending; both are $0 while no bucket has been spent from.
   const savingsRowsTotal = breakdown?.savingsRows.reduce((s, r) => s + r.actual, 0) ?? 0;
+
+  if (hhLoading || (loading && !summary && !monthRow)) return <LoadingView />;
+  if (hhError || !householdId) {
+    return (
+      <View style={[styles.container, { backgroundColor: tokens.bg }]}>
+        <ErrorText message={hhError ?? 'No household found.'} />
+      </View>
+    );
+  }
+
+  const pace = monthPace(month);
+  const needsPct = monthRow?.projected_needs_pct ?? 0;
+  const wantsPct = monthRow?.projected_wants_pct ?? 0;
+  const savingsPct = monthRow?.projected_savings_pct ?? 0;
+  const projected = summary?.projectedIncome ?? 0;
+  const plannedNeeds = Math.round((projected * needsPct) / 100);
+  const plannedWants = Math.round((projected * wantsPct) / 100);
+  const plannedSavings = Math.round((projected * savingsPct) / 100);
+  const out = summary?.out ?? 0;
+  const left = summary?.leftToSpend ?? projected;
+  const overPace = projected > 0 && out > projected * pace;
+  const status =
+    !summary || projected === 0
+      ? 'No plan for this month yet'
+      : left < 0
+        ? 'Over plan — spending is past projected income'
+        : overPace
+          ? 'Ahead of pace — spending is running ahead of the month'
+          : 'On track — spending is inside the plan so far';
 
   return (
     <ScrollView style={{ backgroundColor: tokens.bg }} contentContainerStyle={styles.container}>
