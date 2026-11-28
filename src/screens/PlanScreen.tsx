@@ -37,7 +37,10 @@ export function PlanScreen() {
   const [budgets, setBudgets] = useState<LabelBudget[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [search, setSearch] = useState('');
-  const [selectedLabel, setSelectedLabel] = useState<Label | null>(null);
+  // Budget-by-label accordion: tapping a label row expands it in place so
+  // its planned amount can be adjusted right there. Only one row is expanded
+  // at a time; tapping the expanded row again collapses it.
+  const [expandedLabelId, setExpandedLabelId] = useState<string | null>(null);
 
   // Income source form
   const [addingSource, setAddingSource] = useState(false);
@@ -366,7 +369,10 @@ export function PlanScreen() {
           placeholder="Search labels…"
           placeholderTextColor={tokens.ink3}
           value={search}
-          onChangeText={setSearch}
+          onChangeText={(v) => {
+            setSearch(v);
+            setExpandedLabelId(null);
+          }}
           style={[styles.input, { color: tokens.ink, borderColor: tokens.line, backgroundColor: tokens.surface }]}
         />
         {grouped.length === 0 ? (
@@ -383,19 +389,40 @@ export function PlanScreen() {
                 const planned = budgetByLabel.get(l.id)?.planned_cents ?? 0;
                 const spent = spentByLabel.get(l.id) ?? 0;
                 const over = planned > 0 && spent > planned;
+                const expanded = expandedLabelId === l.id;
                 return (
-                  <Pressable key={l.id} onPress={() => setSelectedLabel(l)} style={[styles.labelRow, { borderTopColor: tokens.line }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: tokens.ink, fontSize: 14.5, fontWeight: '600' }}>{l.label}</Text>
-                      <Text style={{ color: over ? tokens.danger : tokens.ink2, fontSize: 12.5, marginTop: 2 }}>
-                        {formatMoney(spent, currency)} spent of {formatMoney(planned, currency)}
-                        {over ? ' · over budget' : ''}
-                        {planned > 0 ? ` · ${formatMoney(Math.max(0, planned - spent), currency)} left` : ''}
-                      </Text>
-                      <Bar fill={planned > 0 ? spent / planned : 0} color={over ? tokens.danger : tokens.needs} />
-                    </View>
-                    <Text style={{ color: tokens.ink3, fontSize: 16 }}>›</Text>
-                  </Pressable>
+                  <View key={l.id} style={{ borderTopColor: tokens.line, borderTopWidth: 1, paddingVertical: 10 }}>
+                    <Pressable
+                      onPress={() => setExpandedLabelId(expanded ? null : l.id)}
+                      style={{ alignItems: 'center', flexDirection: 'row', gap: 10 }}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: tokens.ink, fontSize: 14.5, fontWeight: '600' }}>{l.label}</Text>
+                        <Text style={{ color: over ? tokens.danger : tokens.ink2, fontSize: 12.5, marginTop: 2 }}>
+                          {formatMoney(spent, currency)} spent of {formatMoney(planned, currency)}
+                          {over ? ' · over budget' : ''}
+                          {planned > 0 ? ` · ${formatMoney(Math.max(0, planned - spent), currency)} left` : ''}
+                        </Text>
+                        <Bar fill={planned > 0 ? spent / planned : 0} color={over ? tokens.danger : tokens.needs} />
+                      </View>
+                      <Text style={{ color: tokens.ink3, fontSize: 16 }}>{expanded ? '⌄' : '›'}</Text>
+                    </Pressable>
+                    {expanded && householdId && monthRow ? (
+                      <LabelBudgetEditor
+                        label={l}
+                        month={month}
+                        householdId={householdId}
+                        planned={planned}
+                        spent={spent}
+                        transactions={transactions.filter((t) => t.label_id === l.id)}
+                        currency={currency}
+                        onSaved={() => {
+                          setExpandedLabelId(null);
+                          load();
+                        }}
+                      />
+                    ) : null}
+                  </View>
                 );
               })}
             </View>
@@ -410,23 +437,6 @@ export function PlanScreen() {
         Income and split changes update Home, Savings, and Year at once.
       </Text>
       <View style={{ height: 24 }} />
-
-      {selectedLabel && householdId && monthRow ? (
-        <LabelBudgetSheet
-          label={selectedLabel}
-          month={month}
-          householdId={householdId}
-          planned={budgetByLabel.get(selectedLabel.id)?.planned_cents ?? 0}
-          spent={spentByLabel.get(selectedLabel.id) ?? 0}
-          transactions={transactions.filter((t) => t.label_id === selectedLabel.id)}
-          currency={currency}
-          onClose={() => setSelectedLabel(null)}
-          onSaved={() => {
-            setSelectedLabel(null);
-            load();
-          }}
-        />
-      ) : null}
     </ScrollView>
   );
 }
@@ -455,7 +465,7 @@ function PctField({
   );
 }
 
-function LabelBudgetSheet({
+function LabelBudgetEditor({
   label,
   month,
   householdId,
@@ -463,7 +473,6 @@ function LabelBudgetSheet({
   spent,
   transactions,
   currency,
-  onClose,
   onSaved,
 }: {
   label: Label;
@@ -473,7 +482,6 @@ function LabelBudgetSheet({
   spent: number;
   transactions: Transaction[];
   currency: Parameters<typeof formatMoney>[1];
-  onClose: () => void;
   onSaved: () => void;
 }) {
   const { tokens } = useTheme();
@@ -490,7 +498,7 @@ function LabelBudgetSheet({
     setBusy(true);
     setError(null);
     // Upsert: insertLabelBudget rejects when a budget already exists for the
-    // month+label, and this sheet edits existing budgets too.
+    // month+label, and this editor edits existing budgets too.
     const res = await upsertLabelBudget(month, label.id, cents, householdId);
     const err = resultError(res);
     if (err) {
@@ -503,8 +511,7 @@ function LabelBudgetSheet({
   };
 
   return (
-    <View style={[styles.sheet, { backgroundColor: tokens.surface, borderColor: tokens.line }]}>
-      <Text style={[styles.sheetTitle, { color: tokens.ink }]}>{label.label}</Text>
+    <View style={{ marginTop: 10 }}>
       <Text style={{ color: tokens.ink2, fontSize: 13, marginTop: 4 }}>
         {formatMoney(spent, currency)} spent this month · {label.needs_wants ?? label.section} · {label.category}
       </Text>
@@ -530,9 +537,6 @@ function LabelBudgetSheet({
           </View>
         ))
       )}
-      <Pressable onPress={onClose} style={{ alignItems: 'center', paddingVertical: 12 }}>
-        <Text style={{ color: tokens.ink2, fontWeight: '600' }}>Close</Text>
-      </Pressable>
     </View>
   );
 }
@@ -544,14 +548,11 @@ const styles = StyleSheet.create({
   header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
   inlineInput: { borderRadius: 8, borderWidth: 1, marginTop: 6, paddingHorizontal: 10, paddingVertical: 6 },
   input: { borderRadius: 10, borderWidth: 1, fontSize: 15, marginTop: 8, paddingHorizontal: 12, paddingVertical: 10 },
-  labelRow: { alignItems: 'center', borderTopWidth: 1, flexDirection: 'row', gap: 10, paddingVertical: 10 },
   legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 10 },
   navBtn: { alignItems: 'center', borderRadius: 10, borderWidth: 1, height: 36, justifyContent: 'center', width: 36 },
   navRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
   pctInput: { borderRadius: 10, borderWidth: 1, fontSize: 15, marginTop: 4, paddingHorizontal: 10, paddingVertical: 9, textAlign: 'center' },
   pctRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
-  sheet: { borderRadius: 16, borderWidth: 1, marginTop: 12, padding: 16 },
-  sheetTitle: { fontSize: 19, fontWeight: '800' },
   smallBtn: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   srcRow: { alignItems: 'center', borderTopWidth: 1, flexDirection: 'row', gap: 8, paddingVertical: 10 },
   title: { fontSize: 24, fontWeight: '800', letterSpacing: -0.4 },
