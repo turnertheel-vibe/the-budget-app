@@ -20,6 +20,7 @@ import type {
   DateFormat,
   HouseholdPreferences,
   Label,
+  LabelBudget,
   Projection,
   Transaction,
 } from '../lib/types';
@@ -172,6 +173,42 @@ export function computeMonthSummary(
     perSource,
     perLabelSpent,
   };
+}
+
+/**
+ * The planned split, derived bottom-up — never typed in as percentages.
+ * Needs and Wants are the sums of the month's per-label budgets, grouped by
+ * each label's Needs/Wants flag (a label with no flag counts as a Want, the
+ * creation default). Savings is the stored savings target for the month
+ * (months.projected_savings_pct); anything left over is Unallocated. Home,
+ * Plan and Year all read this so the plan never disagrees with itself.
+ */
+export interface PlannedSplit {
+  projected: number;
+  needs: number;
+  wants: number;
+  savings: number;
+  unallocated: number;
+}
+
+export function plannedSplit(
+  labels: Label[],
+  budgets: LabelBudget[],
+  projections: Projection[],
+  savingsPct: number | null,
+): PlannedSplit {
+  const labelById = new Map(labels.map((l) => [l.id, l]));
+  let needs = 0;
+  let wants = 0;
+  for (const b of budgets) {
+    const label = labelById.get(b.label_id);
+    if (!label || label.section !== 'Expense') continue;
+    if (label.needs_wants === 'Needs') needs += b.planned_cents;
+    else wants += b.planned_cents;
+  }
+  const projected = projections.reduce((s, p) => s + p.projected_cents, 0);
+  const savings = Math.round((projected * (savingsPct ?? 0)) / 100);
+  return { projected, needs, wants, savings, unallocated: projected - needs - wants - savings };
 }
 
 /** Extract the error string from a data-layer result ({ data, error } or void). */

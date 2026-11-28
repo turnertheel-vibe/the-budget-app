@@ -16,10 +16,11 @@ import {
   listProjections,
   listTransactions,
 } from '../lib/queries';
-import { deleteProjection, updateMonthSplit, upsertLabelBudget, upsertProjection } from '../lib/plan';
-import { resultError, shiftMonth, useHousehold } from '../components/useBudget';
-import { Bar, Card, CardTitle, EmptyState, ErrorText, LoadingView, PrimaryButton, SplitBar } from '../components/ui';
-import type { Label, LabelBudget, Month, Projection, Transaction } from '../lib/types';
+import { deleteProjection, upsertLabelBudget, upsertProjection } from '../lib/plan';
+import { setLabelNeedsWants } from '../lib/reference';
+import { plannedSplit, resultError, shiftMonth, useHousehold } from '../components/useBudget';
+import { Bar, Card, CardTitle, EmptyState, ErrorText, LoadingView, PrimaryButton, SegControl, SplitBar } from '../components/ui';
+import type { Label, LabelBudget, Month, NeedsWants, Projection, Transaction } from '../lib/types';
 
 export function PlanScreen() {
   const { tokens } = useTheme();
@@ -49,13 +50,6 @@ export function PlanScreen() {
   const [editingSource, setEditingSource] = useState<Projection | null>(null);
   const [editSourceAmount, setEditSourceAmount] = useState('');
 
-  // Split editor (local state mirrors the stored months row until saved)
-  const [needsPct, setNeedsPct] = useState('');
-  const [wantsPct, setWantsPct] = useState('');
-  const [savingsPct, setSavingsPct] = useState('');
-  const [splitDirty, setSplitDirty] = useState(false);
-  const [splitMsg, setSplitMsg] = useState<string | null>(null);
-
   const load = useCallback(async () => {
     if (!householdId) return;
     if (!hasLoaded.current) setLoading(true);
@@ -72,10 +66,6 @@ export function PlanScreen() {
     setLabels(labelsRes.data ?? []);
     if (labelsRes.error) setError(labelsRes.error);
     if (m) {
-      setNeedsPct(String(m.projected_needs_pct ?? ''));
-      setWantsPct(String(m.projected_wants_pct ?? ''));
-      setSavingsPct(String(m.projected_savings_pct ?? ''));
-      setSplitDirty(false);
       const [projRes, budRes, txRes] = await Promise.all([
         listProjections(householdId, m.id),
         listLabelBudgets(householdId, m.id),
@@ -103,32 +93,17 @@ export function PlanScreen() {
 
   const projectedTotal = useMemo(() => projections.reduce((s, p) => s + p.projected_cents, 0), [projections]);
 
-  const needsNum = Number(needsPct) || 0;
-  const wantsNum = Number(wantsPct) || 0;
-  const savingsNum = Number(savingsPct) || 0;
-  const splitTotal = needsNum + wantsNum + savingsNum;
-  const splitOver = splitTotal > 100;
-  const unallocated = Math.max(0, 100 - splitTotal);
-  // Derived percentages are floating-point sums (100 - 77.4 - 8.1 - 5.6 =
-  // 8.900000000000006), so round them to 1 decimal for display.
+  // The split is derived, never typed in: Needs and Wants are the month's
+  // per-label budgets grouped by each label's Needs/Wants flag; Savings is
+  // the stored savings target; the rest is Unallocated.
+  const split = useMemo(
+    () => plannedSplit(labels, budgets, projections, monthRow?.projected_savings_pct ?? null),
+    [labels, budgets, projections, monthRow],
+  );
+  // Derived percentages are floating-point sums, so round them to 1 decimal
+  // for display.
   const pct1 = (n: number) => parseFloat(n.toFixed(1));
-
-  const saveSplit = async () => {
-    if (!householdId || !monthRow || splitOver) return;
-    const res = await updateMonthSplit(
-      month,
-      { needsPct: needsNum, wantsPct: wantsNum, savingsPct: savingsNum },
-      householdId,
-    );
-    const err = resultError(res);
-    if (err) {
-      setError(err);
-      return;
-    }
-    setSplitDirty(false);
-    setSplitMsg('Split saved — Home, Savings, and Year read from it.');
-    load();
-  };
+  const splitPct = (cents: number) => (split.projected > 0 ? pct1((cents / split.projected) * 100) : 0);
 
   const addSource = async () => {
     if (!householdId || !monthRow || !sourceName.trim()) return;
@@ -329,36 +304,32 @@ export function PlanScreen() {
 
       {monthRow ? (
         <Card>
-          <CardTitle title="How it splits" right={`${pct1(splitTotal)}%`} />
+          <CardTitle title="How it splits" />
           <SplitBar
             segments={[
-              { value: needsNum, color: tokens.needs },
-              { value: wantsNum, color: tokens.wants },
-              { value: savingsNum, color: tokens.savings },
+              { value: splitPct(split.needs), color: tokens.needs },
+              { value: splitPct(split.wants), color: tokens.wants },
+              { value: splitPct(split.savings), color: tokens.savings },
             ]}
           />
           <View style={styles.legend}>
-            <Text style={{ color: tokens.ink2, fontSize: 12.5 }}>Needs {needsNum}%</Text>
-            <Text style={{ color: tokens.ink2, fontSize: 12.5 }}>Wants {wantsNum}%</Text>
-            <Text style={{ color: tokens.ink2, fontSize: 12.5 }}>Savings {savingsNum}%</Text>
-            {unallocated > 0 ? <Text style={{ color: tokens.ink2, fontSize: 12.5 }}>Unallocated {pct1(unallocated)}%</Text> : null}
-          </View>
-          {splitOver ? (
-            <Text style={{ color: tokens.danger, fontSize: 13, fontWeight: '700', marginTop: 8 }}>
-              Over 100% — lower one of the three before saving.
+            <Text style={{ color: tokens.ink2, fontSize: 12.5 }}>
+              Needs {formatMoney(split.needs, currency)} · {splitPct(split.needs)}%
             </Text>
-          ) : null}
-          <View style={styles.pctRow}>
-            <PctField label="Needs %" value={needsPct} onChange={(v) => { setNeedsPct(v); setSplitDirty(true); }} tokens={tokens} />
-            <PctField label="Wants %" value={wantsPct} onChange={(v) => { setWantsPct(v); setSplitDirty(true); }} tokens={tokens} />
-            <PctField label="Savings %" value={savingsPct} onChange={(v) => { setSavingsPct(v); setSplitDirty(true); }} tokens={tokens} />
+            <Text style={{ color: tokens.ink2, fontSize: 12.5 }}>
+              Wants {formatMoney(split.wants, currency)} · {splitPct(split.wants)}%
+            </Text>
+            <Text style={{ color: tokens.ink2, fontSize: 12.5 }}>
+              Savings {formatMoney(split.savings, currency)} · {splitPct(split.savings)}%
+            </Text>
+            {split.unallocated !== 0 ? (
+              <Text style={{ color: split.unallocated < 0 ? tokens.danger : tokens.ink2, fontSize: 12.5 }}>
+                Unallocated {formatMoney(split.unallocated, currency)} · {splitPct(split.unallocated)}%
+              </Text>
+            ) : null}
           </View>
-          {splitDirty ? (
-            <PrimaryButton label="Save split" disabled={splitOver} onPress={saveSplit} />
-          ) : null}
-          {splitMsg && !splitDirty ? <Text style={{ color: tokens.brand, fontSize: 13, marginTop: 8 }}>{splitMsg}</Text> : null}
           <Text style={{ color: tokens.ink3, fontSize: 12, marginTop: 8 }}>
-            Under 100% shows as Unallocated. Over 100% is blocked.
+            From your label budgets below — tap a label to change its amount or set it as a Need or a Want.
           </Text>
         </Card>
       ) : null}
@@ -402,6 +373,7 @@ export function PlanScreen() {
                           {formatMoney(spent, currency)} spent of {formatMoney(planned, currency)}
                           {over ? ' · over budget' : ''}
                           {planned > 0 ? ` · ${formatMoney(Math.max(0, planned - spent), currency)} left` : ''}
+                          {` · ${l.needs_wants ?? 'Wants'}`}
                         </Text>
                         <Bar fill={planned > 0 ? spent / planned : 0} color={over ? tokens.danger : tokens.needs} />
                       </View>
@@ -441,30 +413,6 @@ export function PlanScreen() {
   );
 }
 
-function PctField({
-  label,
-  value,
-  onChange,
-  tokens,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  tokens: ReturnType<typeof useTheme>['tokens'];
-}) {
-  return (
-    <View style={{ flex: 1 }}>
-      <Text style={{ color: tokens.ink2, fontSize: 12, fontWeight: '700' }}>{label}</Text>
-      <TextInput
-        value={value}
-        onChangeText={(v) => onChange(v.replace(/[^0-9]/g, ''))}
-        keyboardType="number-pad"
-        style={[styles.pctInput, { color: tokens.ink, borderColor: tokens.line, backgroundColor: tokens.surface }]}
-      />
-    </View>
-  );
-}
-
 function LabelBudgetEditor({
   label,
   month,
@@ -486,6 +434,7 @@ function LabelBudgetEditor({
 }) {
   const { tokens } = useTheme();
   const [amount, setAmount] = useState((planned / 100).toFixed(2));
+  const [needsWants, setNeedsWants] = useState<NeedsWants>(label.needs_wants ?? 'Wants');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -500,7 +449,10 @@ function LabelBudgetEditor({
     // Upsert: insertLabelBudget rejects when a budget already exists for the
     // month+label, and this editor edits existing budgets too.
     const res = await upsertLabelBudget(month, label.id, cents, householdId);
-    const err = resultError(res);
+    let err = resultError(res);
+    if (!err && needsWants !== (label.needs_wants ?? 'Wants')) {
+      err = resultError(await setLabelNeedsWants(label.id, needsWants, householdId));
+    }
     if (err) {
       setError(err);
       setBusy(false);
@@ -513,8 +465,12 @@ function LabelBudgetEditor({
   return (
     <View style={{ marginTop: 10 }}>
       <Text style={{ color: tokens.ink2, fontSize: 13, marginTop: 4 }}>
-        {formatMoney(spent, currency)} spent this month · {label.needs_wants ?? label.section} · {label.category}
+        {formatMoney(spent, currency)} spent this month · {label.category}
       </Text>
+      <Text style={[styles.fieldLabel, { color: tokens.ink2 }]}>Need or want?</Text>
+      <View style={{ marginTop: 8 }}>
+        <SegControl options={['Needs', 'Wants'] as const} value={needsWants} onChange={setNeedsWants} />
+      </View>
       <Text style={[styles.fieldLabel, { color: tokens.ink2 }]}>Planned monthly amount</Text>
       <TextInput
         value={amount}
@@ -551,8 +507,6 @@ const styles = StyleSheet.create({
   legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 10 },
   navBtn: { alignItems: 'center', borderRadius: 10, borderWidth: 1, height: 36, justifyContent: 'center', width: 36 },
   navRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
-  pctInput: { borderRadius: 10, borderWidth: 1, fontSize: 15, marginTop: 4, paddingHorizontal: 10, paddingVertical: 9, textAlign: 'center' },
-  pctRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
   smallBtn: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   srcRow: { alignItems: 'center', borderTopWidth: 1, flexDirection: 'row', gap: 8, paddingVertical: 10 },
   title: { fontSize: 24, fontWeight: '800', letterSpacing: -0.4 },

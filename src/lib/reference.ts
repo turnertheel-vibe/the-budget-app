@@ -111,6 +111,29 @@ export async function renameLabel(
   return { data: label, error: null };
 }
 
+/** Set whether an expense label counts as a Need or a Want (v3 D3). */
+export async function setLabelNeedsWants(
+  labelId: string,
+  needsWants: NeedsWants,
+  householdId?: string | null,
+): Promise<QueryResult<Label>> {
+  const resolved = await resolveHouseholdId(householdId ?? null);
+  if (!resolved.householdId) return refErr(resolved.error ?? 'No household found.');
+  const { data, error } = await supabase
+    .from('labels')
+    .update({ needs_wants: needsWants })
+    .eq('household_id', resolved.householdId)
+    .eq('id', labelId)
+    .select('*')
+    .single();
+  if (error) return refErr(error.message);
+  const label = (data ?? null) as Label | null;
+  if (label) {
+    await logAudit('update', 'labels', label.id, { needs_wants: needsWants }, resolved.householdId);
+  }
+  return { data: label, error: null };
+}
+
 /** Retire a label: deactivate only — rows already logged against it keep resolving. */
 export async function retireLabel(
   labelId: string,

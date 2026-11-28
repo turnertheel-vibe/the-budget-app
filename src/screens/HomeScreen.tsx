@@ -29,6 +29,7 @@ import { isSpendMovement } from '../lib/savings';
 import {
   computeMonthSummary,
   monthPace,
+  plannedSplit,
   shiftMonth,
   useHousehold,
 } from '../components/useBudget';
@@ -44,8 +45,6 @@ export function HomeScreen() {
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<ReturnType<typeof computeMonthSummary> | null>(null);
   const [monthRow, setMonthRow] = useState<{
-    projected_needs_pct: number | null;
-    projected_wants_pct: number | null;
     projected_savings_pct: number | null;
   } | null>(null);
   const [labelCount, setLabelCount] = useState(0);
@@ -54,6 +53,7 @@ export function HomeScreen() {
   const [reimbCount, setReimbCount] = useState(0);
   const [labels, setLabels] = useState<Label[]>([]);
   const [labelBudgets, setLabelBudgets] = useState<LabelBudget[]>([]);
+  const [projections, setProjections] = useState<Projection[]>([]);
 
   const load = useCallback(async () => {
     if (!householdId) return;
@@ -80,6 +80,7 @@ export function HomeScreen() {
     if (!m) {
       setSummary(null);
       setLabelBudgets([]);
+      setProjections([]);
       setReimbCount(0);
       setLoading(false);
       return;
@@ -98,6 +99,7 @@ export function HomeScreen() {
       (movRes.data ?? []).filter(isSpendMovement).map((mv) => mv.transaction_id as string),
     );
     setSummary(computeMonthSummary(txs, labels, projs, bucketPaid));
+    setProjections(projs);
     setLabelBudgets(budRes.data ?? []);
     setReimbCount(txs.filter((t) => t.kind === 'reimbursement').length);
     setLoading(false);
@@ -166,13 +168,13 @@ export function HomeScreen() {
   }
 
   const pace = monthPace(month);
-  const needsPct = monthRow?.projected_needs_pct ?? 0;
-  const wantsPct = monthRow?.projected_wants_pct ?? 0;
-  const savingsPct = monthRow?.projected_savings_pct ?? 0;
+  // Planned Needs/Wants/Savings come from the derived split (label budgets
+  // grouped by each label's Needs/Wants flag), never from typed percentages.
+  const split = plannedSplit(labels, labelBudgets, projections, monthRow?.projected_savings_pct ?? null);
   const projected = summary?.projectedIncome ?? 0;
-  const plannedNeeds = Math.round((projected * needsPct) / 100);
-  const plannedWants = Math.round((projected * wantsPct) / 100);
-  const plannedSavings = Math.round((projected * savingsPct) / 100);
+  const plannedNeeds = split.needs;
+  const plannedWants = split.wants;
+  const plannedSavings = split.savings;
   const out = summary?.out ?? 0;
   const left = summary?.leftToSpend ?? projected;
   const overPace = projected > 0 && out > projected * pace;

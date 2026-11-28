@@ -180,7 +180,12 @@ export function YearScreen() {
           }
         }
         const pace = monthPace(mRow.month);
-        const plannedWants = Math.round((s.projectedIncome * (mRow.projected_wants_pct ?? 0)) / 100);
+        // Planned Wants comes from the month's per-label budgets, grouped by
+        // each label's Needs/Wants flag — never from a typed percentage.
+        const plannedWants = (budRes.data ?? []).reduce((s, b) => {
+          const lbl = labels.find((l) => l.id === b.label_id);
+          return lbl && lbl.section === 'Expense' && lbl.needs_wants !== 'Needs' ? s + b.planned_cents : s;
+        }, 0);
         if (plannedWants > 0 && s.wantsActual > plannedWants * pace) {
           notes.push('Wants spending is ahead of pace for the month.');
         }
